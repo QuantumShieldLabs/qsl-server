@@ -14,6 +14,11 @@ use std::{
 use tracing::info;
 use uuid::Uuid;
 
+// Named aliases to keep queue types readable (also satisfies clippy::type_complexity).
+type QueueMsg = (String, Vec<u8>);
+type Queue = VecDeque<QueueMsg>;
+type Queues = HashMap<String, Queue>;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     pub max_body_bytes: usize,
@@ -40,7 +45,8 @@ impl Limits {
 #[derive(Clone)]
 pub struct AppState {
     // channel -> queue of (msg_id, bytes)
-    queues: Arc<Mutex<HashMap<String, VecDeque<(String, Vec<u8>)>>>>,
+    queues: Arc<Mutex<Queues>>,
+
     limits: Limits,
 }
 
