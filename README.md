@@ -22,38 +22,25 @@ cargo run
 # listens on 0.0.0.0:8080 by default
 ```
 
-## Remote Linux deployment proof (systemd + smoke)
+CLI overrides env, env overrides defaults:
 
-### Build release binary
 ```bash
-cargo build --release
+qsl-server --bind 0.0.0.0 --port 8080 --max-body-bytes 1048576 --max-queue-depth 256
 ```
 
-### Copy to host
+## Remote deployment (Ubuntu 24.04 + systemd)
+
+The repo includes a reproducible install script and a systemd unit template.
+
 ```bash
-scp target/release/qsl-server user@HOST:/opt/qsl-server/qsl-server
+# copy scripts to the host, then run as root:
+sudo bash scripts/install_ubuntu_24_04_systemd.sh
 ```
 
-### systemd unit (qsl-server.service)
-```
-[Unit]
-Description=QSL Transport-only Relay
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/qsl-server
-ExecStart=/opt/qsl-server/qsl-server
-Environment=PORT=8080
-Restart=always
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=/var/log/qsl-server
-
-[Install]
-WantedBy=multi-user.target
-```
+Artifacts:
+- systemd unit: `systemd/qsl-server.service`
+- install script: `scripts/install_ubuntu_24_04_systemd.sh`
+- verify script: `scripts/verify_remote.sh`
 
 ### Firewall notes (example)
 ```bash
@@ -61,17 +48,17 @@ WantedBy=multi-user.target
 sudo ufw allow 8080/tcp
 ```
 
-### Smoke checks
+## Verify deployment (on the host)
 ```bash
-# push
-curl -X POST --data-binary @/path/to/file.bin http://HOST:8080/v1/push/testchan
-
-# pull (should return bytes)
-curl -v http://HOST:8080/v1/pull/testchan --output /tmp/pulled.bin
-
-# second pull should be empty
-curl -v http://HOST:8080/v1/pull/testchan
+sudo bash scripts/verify_remote.sh
 ```
+
+The verify script checks:
+- systemd active status
+- listener on port 8080
+- push/pull sanity
+- deployed git HEAD
 
 ## Scope boundary
 - Payloads are opaque bytes; the relay does not parse or interpret protocol messages.
+- Transport-only relay; no protocol or cryptographic behavior is implemented here.

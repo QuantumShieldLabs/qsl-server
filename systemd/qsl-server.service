@@ -1,0 +1,22 @@
+[Unit]
+Description=QSL Transport-only Relay
+After=network.target
+
+[Service]
+Type=simple
+User=qslrelay
+Group=qslrelay
+WorkingDirectory=/opt/qsl-server
+Environment=PORT=8080
+Environment=MAX_BODY_BYTES=1048576
+Environment=MAX_QUEUE_DEPTH=256
+ExecStart=/opt/qsl-server/bin/qsl-server
+Restart=always
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/qsl-server
+
+[Install]
+WantedBy=multi-user.target
