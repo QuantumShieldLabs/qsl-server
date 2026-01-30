@@ -25,16 +25,21 @@ pub struct Limits {
     pub max_queue_depth: usize,
 }
 
+pub const MAX_BODY_BYTES_CEILING: usize = 1024 * 1024;
+pub const MAX_QUEUE_DEPTH_CEILING: usize = 256;
+
 impl Limits {
     pub fn from_env() -> Self {
         let max_body_bytes = std::env::var("MAX_BODY_BYTES")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(1024 * 1024);
+            .unwrap_or(MAX_BODY_BYTES_CEILING)
+            .min(MAX_BODY_BYTES_CEILING);
         let max_queue_depth = std::env::var("MAX_QUEUE_DEPTH")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(256);
+            .unwrap_or(MAX_QUEUE_DEPTH_CEILING)
+            .min(MAX_QUEUE_DEPTH_CEILING);
         Self {
             max_body_bytes,
             max_queue_depth,
@@ -127,6 +132,22 @@ mod tests {
     use super::*;
     use reqwest::StatusCode as ReqStatus;
     use tokio::net::TcpListener;
+    use tracing::subscriber::set_default;
+
+    #[derive(Clone)]
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut g = self.0.lock().unwrap();
+            g.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     async fn spawn_server(limits: Limits) -> (String, tokio::task::JoinHandle<()>) {
         let state = AppState::new(limits);
@@ -203,6 +224,13 @@ mod tests {
         assert_eq!(push.status(), ReqStatus::PAYLOAD_TOO_LARGE);
         let body = push.text().await.unwrap();
         assert_eq!(body, "ERR_TOO_LARGE");
+
+        let pull = client
+            .get(format!("{}/v1/pull/oversize", base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(pull.status(), ReqStatus::NO_CONTENT);
         handle.abort();
     }
 
@@ -231,6 +259,51 @@ mod tests {
         assert_eq!(r2.status(), ReqStatus::TOO_MANY_REQUESTS);
         let body = r2.text().await.unwrap();
         assert_eq!(body, "ERR_QUEUE_FULL");
+
+        let pull1 = client
+            .get(format!("{}/v1/pull/qfull", base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(pull1.status(), ReqStatus::OK);
+
+        let pull2 = client
+            .get(format!("{}/v1/pull/qfull", base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(pull2.status(), ReqStatus::NO_CONTENT);
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn payload_not_logged() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = SharedWriter(buf.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = set_default(subscriber);
+
+        let (base, handle) = spawn_server(Limits {
+            max_body_bytes: 1024 * 1024,
+            max_queue_depth: 8,
+        })
+        .await;
+        let client = reqwest::Client::new();
+        let payload = b"SECRET_PAYLOAD_ABC".to_vec();
+        let _ = client
+            .post(format!("{}/v1/push/nolog", base))
+            .body(payload)
+            .send()
+            .await
+            .unwrap();
+
+        handle.abort();
+
+        let binding = buf.lock().unwrap();
+        let logged = String::from_utf8_lossy(&binding);
+        assert!(!logged.contains("SECRET_PAYLOAD_ABC"));
     }
 }

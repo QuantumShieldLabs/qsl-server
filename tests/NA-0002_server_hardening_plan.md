@@ -26,3 +26,13 @@
 
 ## Rollback
 - Revert unit patch, restart service, re-run smoke test
+
+## Executed evidence
+- Limits enforcement: oversize -> 413; queue overflow -> 429 (tests in src/lib.rs, tests/relay_smoke.rs)
+- Logging redaction: payload_not_logged test (src/lib.rs)
+- Commands run:
+  - cargo fmt --check
+  - cargo test
+  - cargo clippy --all-targets -- -D warnings
+- Systemd hardening stanza applied in systemd/qsl-server.service
+- OUT_DIR: /home/victor/work/qsl/_forensics/na0002_impl_20260130T011856Z

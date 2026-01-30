@@ -51,3 +51,7 @@ Notes:
 - `systemctl daemon-reload`
 - `systemctl restart qsl-server`
 - Re-run verify script to confirm service health.
+
+## Implementation status (NA-0002)
+- Hardening stanza applied in `systemd/qsl-server.service` (see unit for exact values).
+- Any incompatible directives should be documented with rationale in the follow-on PR.
