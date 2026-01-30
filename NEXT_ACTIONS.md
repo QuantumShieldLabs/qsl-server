@@ -2,7 +2,7 @@
 
 ### NA-0001 — qsl-server deployment hardening contract (docs-only) + systemd hardening plan
 
-Status: READY
+Status: DONE
 Scope: docs-only (no code/systemd changes yet)
 
 Objective:
@@ -27,4 +27,5 @@ Acceptance criteria:
 - DECISIONS entry added capturing key contract choices (TLS termination model, auth/no-auth stance, required limits).
 
 Evidence:
+- PR #4 (https://github.com/QuantumShieldLabs/qsl-server/pull/4) merged (merge SHA 5f1ebe9c156f2faa3acc1bce7d66b5b0679bbe01).
 - N/A (docs-only)
