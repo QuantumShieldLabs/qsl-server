@@ -1,6 +1,6 @@
-#[tokio::test]
-async fn smoke_post_get_ack() {
-    // This is a placeholder smoke test that can be wired once server is run in CI.
-    // For now, ensure crate builds; real integration can be added when CI harness exists.
-    assert!(true);
+#[test]
+fn limits_defaults_are_nonzero() {
+    let limits = qsl_server::Limits::from_env();
+    assert!(limits.max_body_bytes > 0);
+    assert!(limits.max_queue_depth > 0);
 }

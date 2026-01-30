@@ -73,3 +73,14 @@ These are required for production deployments. Values below are recommended ceil
 Any deviation from this contract requires:
 - a documented exception with rationale
 - a follow-on NA for implementation changes
+
+## Implementation Notes / Deploy Checklist (NA-0002)
+Use this checklist when applying NA-0002 changes:
+- [ ] Update systemd unit per DOC-SRV-002 (hardening stanza) and reload systemd.
+- [ ] Set explicit environment values in the unit:
+  - MAX_BODY_BYTES (<= 1 MiB recommended ceiling)
+  - MAX_QUEUE_DEPTH (<= 256 recommended ceiling)
+  - PORT (default 8080; avoid 80/443 at app layer)
+- [ ] Verify service health with the repo verify script (if available).
+- [ ] Confirm logs contain no payload bytes or secrets (grep guard).
+- [ ] Rollback plan documented (restore prior unit file, restart service).

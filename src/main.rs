@@ -1,7 +1,7 @@
 use std::{env, net::SocketAddr};
 
 use clap::Parser;
-use qsl_server::{app, AppState, Limits};
+use qsl_server::{app, AppState, Limits, MAX_BODY_BYTES_CEILING, MAX_QUEUE_DEPTH_CEILING};
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -60,8 +60,13 @@ fn resolve_config(cli: Cli, env: EnvVals) -> Config {
     let max_body_bytes = cli
         .max_body_bytes
         .or(env.max_body_bytes)
-        .unwrap_or(1024 * 1024);
-    let max_queue_depth = cli.max_queue_depth.or(env.max_queue_depth).unwrap_or(256);
+        .unwrap_or(MAX_BODY_BYTES_CEILING)
+        .min(MAX_BODY_BYTES_CEILING);
+    let max_queue_depth = cli
+        .max_queue_depth
+        .or(env.max_queue_depth)
+        .unwrap_or(MAX_QUEUE_DEPTH_CEILING)
+        .min(MAX_QUEUE_DEPTH_CEILING);
     Config {
         bind,
         port,
@@ -134,5 +139,19 @@ mod cli_tests {
         assert_eq!(cfg.port, 7070);
         assert_eq!(cfg.limits.max_body_bytes, 2048);
         assert_eq!(cfg.limits.max_queue_depth, 7);
+    }
+
+    #[test]
+    fn limits_are_capped() {
+        let cli = Cli {
+            bind: None,
+            port: None,
+            max_body_bytes: Some(MAX_BODY_BYTES_CEILING * 2),
+            max_queue_depth: Some(MAX_QUEUE_DEPTH_CEILING * 2),
+        };
+        let env = env_vals(None, None, None);
+        let cfg = resolve_config(cli, env);
+        assert_eq!(cfg.limits.max_body_bytes, MAX_BODY_BYTES_CEILING);
+        assert_eq!(cfg.limits.max_queue_depth, MAX_QUEUE_DEPTH_CEILING);
     }
 }
