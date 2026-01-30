@@ -32,7 +32,7 @@ Evidence:
 
 ### NA-0002 — Enforce deployment contract in server + systemd hardening patch (implementation)
 
-Status: READY
+Status: DONE
 Scope: server code + systemd unit patch (implementation PR), plus tests where feasible.
 Wire/behavior change allowed? YES (limits enforcement + safer defaults)
 Objective:
@@ -65,3 +65,6 @@ Acceptance:
 - No payload logging confirmed via tests or grep guard.
 - systemd unit hardening patch included and documented.
 - TRACEABILITY updated with PR links and artifacts.
+
+Evidence:
+- Impl PR #7 (https://github.com/QuantumShieldLabs/qsl-server/pull/7) merged (merge SHA 13c7266817f158ce9ca5a786eb540e7d4453083c).
