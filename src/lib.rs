@@ -1,7 +1,7 @@
 use axum::{
     body::Bytes,
-    extract::{Path, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -69,6 +69,22 @@ struct PostResp {
     id: String,
 }
 
+#[derive(Serialize)]
+struct PullItem {
+    id: String,
+    data: Vec<u8>,
+}
+
+#[derive(Serialize)]
+struct PullResp {
+    items: Vec<PullItem>,
+}
+
+#[derive(serde::Deserialize)]
+struct PullQuery {
+    max: Option<usize>,
+}
+
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/v1/push/:channel", post(push_message))
@@ -79,6 +95,7 @@ pub fn app(state: AppState) -> Router {
 async fn push_message(
     State(st): State<AppState>,
     Path(channel): Path<String>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     if body.is_empty() {
@@ -88,7 +105,12 @@ async fn push_message(
         return (StatusCode::PAYLOAD_TOO_LARGE, "ERR_TOO_LARGE").into_response();
     }
 
-    let msg_id = Uuid::new_v4().to_string();
+    let msg_id = headers
+        .get("x-msg-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.trim().is_empty())
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let mut g = st.queues.lock().unwrap();
     let q = g.entry(channel.clone()).or_default();
     if q.len() >= st.limits.max_queue_depth {
@@ -110,27 +132,40 @@ async fn push_message(
 async fn pull_message(
     State(st): State<AppState>,
     Path(channel): Path<String>,
+    Query(query): Query<PullQuery>,
 ) -> impl IntoResponse {
+    let max = query.max.unwrap_or(1);
+    if max == 0 {
+        return (StatusCode::BAD_REQUEST, "ERR_BAD_MAX").into_response();
+    }
+    let max = max.min(st.limits.max_queue_depth);
     let mut g = st.queues.lock().unwrap();
     let q = g.entry(channel.clone()).or_default();
-    if let Some((msg_id, data)) = q.pop_front() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-msg-id", HeaderValue::from_str(&msg_id).unwrap());
-        info!(
-            "pull channel={} id={} bytes={}",
-            channel,
-            msg_id,
-            data.len()
-        );
-        return (StatusCode::OK, headers, data).into_response();
+    if q.is_empty() {
+        return StatusCode::NO_CONTENT.into_response();
     }
-    StatusCode::NO_CONTENT.into_response()
+    let mut items = Vec::with_capacity(max);
+    for _ in 0..max {
+        if let Some((msg_id, data)) = q.pop_front() {
+            info!(
+                "pull channel={} id={} bytes={}",
+                channel,
+                msg_id,
+                data.len()
+            );
+            items.push(PullItem { id: msg_id, data });
+        } else {
+            break;
+        }
+    }
+    (StatusCode::OK, Json(PullResp { items })).into_response()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use reqwest::StatusCode as ReqStatus;
+    use serde::Deserialize;
     use tokio::net::TcpListener;
     use tracing::subscriber::set_default;
 
@@ -160,6 +195,17 @@ mod tests {
         (format!("http://{}", addr), handle)
     }
 
+    #[derive(Deserialize)]
+    struct PullItem {
+        id: String,
+        data: Vec<u8>,
+    }
+
+    #[derive(Deserialize)]
+    struct PullResp {
+        items: Vec<PullItem>,
+    }
+
     #[tokio::test]
     async fn push_then_pull_roundtrip() {
         let (base, handle) = spawn_server(Limits {
@@ -179,13 +225,15 @@ mod tests {
         assert_eq!(push.status(), ReqStatus::OK);
 
         let pull = client
-            .get(format!("{}/v1/pull/test", base))
+            .get(format!("{}/v1/pull/test?max=1", base))
             .send()
             .await
             .unwrap();
         assert_eq!(pull.status(), ReqStatus::OK);
-        let body = pull.bytes().await.unwrap();
-        assert_eq!(body.as_ref(), payload.as_slice());
+        let body: PullResp = pull.json().await.unwrap();
+        assert_eq!(body.items.len(), 1);
+        assert!(!body.items[0].id.is_empty());
+        assert_eq!(body.items[0].data.as_slice(), payload.as_slice());
 
         handle.abort();
     }
@@ -199,7 +247,7 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
         let pull = client
-            .get(format!("{}/v1/pull/empty", base))
+            .get(format!("{}/v1/pull/empty?max=1", base))
             .send()
             .await
             .unwrap();
@@ -226,7 +274,7 @@ mod tests {
         assert_eq!(body, "ERR_TOO_LARGE");
 
         let pull = client
-            .get(format!("{}/v1/pull/oversize", base))
+            .get(format!("{}/v1/pull/oversize?max=1", base))
             .send()
             .await
             .unwrap();
@@ -261,18 +309,72 @@ mod tests {
         assert_eq!(body, "ERR_QUEUE_FULL");
 
         let pull1 = client
-            .get(format!("{}/v1/pull/qfull", base))
+            .get(format!("{}/v1/pull/qfull?max=1", base))
             .send()
             .await
             .unwrap();
         assert_eq!(pull1.status(), ReqStatus::OK);
+        let body1: PullResp = pull1.json().await.unwrap();
+        assert_eq!(body1.items.len(), 1);
+        assert!(!body1.items[0].id.is_empty());
 
         let pull2 = client
-            .get(format!("{}/v1/pull/qfull", base))
+            .get(format!("{}/v1/pull/qfull?max=1", base))
             .send()
             .await
             .unwrap();
         assert_eq!(pull2.status(), ReqStatus::NO_CONTENT);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn pull_deletes_on_deliver() {
+        let (base, handle) = spawn_server(Limits {
+            max_body_bytes: 1024 * 1024,
+            max_queue_depth: 8,
+        })
+        .await;
+        let client = reqwest::Client::new();
+
+        let _ = client
+            .post(format!("{}/v1/push/two", base))
+            .body(b"a".to_vec())
+            .send()
+            .await
+            .unwrap();
+        let _ = client
+            .post(format!("{}/v1/push/two", base))
+            .body(b"b".to_vec())
+            .send()
+            .await
+            .unwrap();
+
+        let pull1 = client
+            .get(format!("{}/v1/pull/two?max=1", base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(pull1.status(), ReqStatus::OK);
+        let body1: PullResp = pull1.json().await.unwrap();
+        assert_eq!(body1.items.len(), 1);
+
+        let pull2 = client
+            .get(format!("{}/v1/pull/two?max=2", base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(pull2.status(), ReqStatus::OK);
+        let body2: PullResp = pull2.json().await.unwrap();
+        assert_eq!(body2.items.len(), 1);
+        assert!(!body2.items[0].id.is_empty());
+
+        let pull3 = client
+            .get(format!("{}/v1/pull/two?max=1", base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(pull3.status(), ReqStatus::NO_CONTENT);
+
         handle.abort();
     }
 
