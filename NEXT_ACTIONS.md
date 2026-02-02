@@ -71,7 +71,7 @@ Evidence:
 
 ### NA-0003 — Relay inbox store-and-forward contract (PUSH/PULL) + test plan (docs-only)
 
-Status: READY
+Status: DONE
 Scope: docs-only (no code changes)
 
 Invariants:
@@ -89,3 +89,6 @@ Acceptance:
 - Plan stub exists.
 - TRACEABILITY updated with PR link.
 - READY count exactly 1.
+
+Evidence:
+- Impl PR #10 (https://github.com/QuantumShieldLabs/qsl-server/pull/10) merged (merge SHA 0649094990bcd81db61d37c2f91d73653a12d907).
