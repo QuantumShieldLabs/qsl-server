@@ -68,3 +68,24 @@ Acceptance:
 
 Evidence:
 - Impl PR #7 (https://github.com/QuantumShieldLabs/qsl-server/pull/7) merged (merge SHA 13c7266817f158ce9ca5a786eb540e7d4453083c).
+
+### NA-0003 — Relay inbox store-and-forward contract (PUSH/PULL) + test plan (docs-only)
+
+Status: READY
+Scope: docs-only (no code changes)
+
+Invariants:
+- Ciphertext-only; no payload logging.
+- Hard limits enforced: MAX_BODY_BYTES, MAX_QUEUE_DEPTH; deterministic rejects.
+- Bounded retention (TTL) documented.
+- Minimal metadata: opaque channel IDs only; no usernames.
+
+Deliverables:
+- docs/server/DOC-SRV-003_Relay_Inbox_Contract_v1.0.0_DRAFT.md
+- tests/NA-0003_relay_inbox_contract_plan.md
+
+Acceptance:
+- Doc exists and is internally consistent.
+- Plan stub exists.
+- TRACEABILITY updated with PR link.
+- READY count exactly 1.
