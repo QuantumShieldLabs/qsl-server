@@ -1,5 +1,6 @@
 use qsl_server::{app, AppState, Limits};
 use reqwest::StatusCode as ReqStatus;
+use serde::Deserialize;
 use tokio::net::TcpListener;
 
 async fn spawn_server(limits: Limits) -> (String, tokio::task::JoinHandle<()>) {
@@ -11,6 +12,17 @@ async fn spawn_server(limits: Limits) -> (String, tokio::task::JoinHandle<()>) {
         axum::serve(listener, app).await.unwrap();
     });
     (format!("http://{}", addr), handle)
+}
+
+#[derive(Deserialize)]
+struct PullItem {
+    id: String,
+    data: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+struct PullResp {
+    items: Vec<PullItem>,
 }
 
 #[tokio::test]
@@ -32,13 +44,15 @@ async fn push_then_pull_roundtrip() {
     assert_eq!(push.status(), ReqStatus::OK);
 
     let pull = client
-        .get(format!("{}/v1/pull/test", base))
+        .get(format!("{}/v1/pull/test?max=1", base))
         .send()
         .await
         .unwrap();
     assert_eq!(pull.status(), ReqStatus::OK);
-    let body = pull.bytes().await.unwrap();
-    assert_eq!(body.as_ref(), payload.as_slice());
+    let body: PullResp = pull.json().await.unwrap();
+    assert_eq!(body.items.len(), 1);
+    assert!(!body.items[0].id.is_empty());
+    assert_eq!(body.items[0].data.as_slice(), payload.as_slice());
 
     handle.abort();
 }
@@ -52,7 +66,7 @@ async fn pull_empty_returns_204() {
     .await;
     let client = reqwest::Client::new();
     let pull = client
-        .get(format!("{}/v1/pull/empty", base))
+        .get(format!("{}/v1/pull/empty?max=1", base))
         .send()
         .await
         .unwrap();

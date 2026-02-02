@@ -57,6 +57,19 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
   - recv_start / recv_item / recv_commit / recv_none / recv_error
 - Client must not emit secrets in logs/markers.
 
+## Implementation (current)
+- Endpoint: `POST /v1/push/:channel`
+  - Optional header: `x-msg-id` (client-provided opaque id; server will generate if absent).
+  - Body: raw ciphertext blob (opaque).
+  - Rejects:
+    - oversize → 413 `ERR_TOO_LARGE`
+    - queue full → 429 `ERR_QUEUE_FULL`
+- Endpoint: `GET /v1/pull/:channel?max=N`
+  - Returns 204 if empty.
+  - Returns JSON `{ "items": [ { "id": "<opaque>", "data": [u8...] }, ... ] }`.
+  - Delete-on-deliver: items are removed when returned.
+- Retention/TTL: not implemented yet; bounded by queue depth only (follow-on).
+
 ## Deployment notes
 - TLS termination must be explicit (typically at ALB/Nginx/Caddy).
 - This contract is docs-only; no behavior changes are implied until implementation PRs.

@@ -22,5 +22,16 @@
 ## CI commands
 - N/A (docs-only)
 
+## Executed evidence (implementation)
+- Tests added in src/lib.rs:
+  - push_then_pull_roundtrip
+  - pull_deletes_on_deliver
+  - oversize_returns_413
+  - queue_full_returns_429
+  - payload_not_logged
+- Commands:
+  - cargo test
+  - cargo clippy --all-targets -- -D warnings
+
 ## Rollback
 - Revert docs/plan changes only.
