@@ -95,7 +95,7 @@ Evidence:
 
 ### NA-0004 — Server hardening: optional auth gate + remove unwrap/panic paths + deterministic rejects + test-backed
 
-Status: READY
+Status: DONE
 Scope: server code + tests (implementation PR later). No protocol/client changes.
 
 What is protected:
@@ -117,3 +117,6 @@ Acceptance:
   - auth enabled => missing token `401`, wrong token `401`, correct token ok
   - no unwrap/panic paths remain (clippy/grep + tests)
 - `cargo fmt`, `cargo test`, `cargo clippy` pass; CI (if present) green.
+
+Evidence:
+- Impl PR #13 (https://github.com/QuantumShieldLabs/qsl-server/pull/13) merged (merge SHA 1fa1978f2f30057f34a139d2f01e1e1c61746d96).
