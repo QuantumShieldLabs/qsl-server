@@ -123,7 +123,7 @@ Evidence:
 
 ### NA-0005 — Provenance light touch: NOTICE + PROVENANCE + signed-release runbook
 
-Status: READY
+Status: DONE
 Scope: governance files + root docs only (no src/systemd/workflow changes)
 
 Objective:
@@ -143,6 +143,7 @@ Deliverables:
 - Add `PROVENANCE.md` at repo root.
 - Add `SIGNED_RELEASES_RUNBOOK.md` at repo root.
 - Update `tests/NA-0005_provenance_lighttouch_plan.md` with executed evidence.
+- Implementation complete: PR #16 (https://github.com/QuantumShieldLabs/qsl-server/pull/16), merge SHA `cfc8e600988dbba40f30a39eda7021efaf8c83d5`.
 
 Acceptance:
 - Governance, implementation, and close-out PRs are scope-limited and green.
