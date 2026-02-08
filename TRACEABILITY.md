@@ -4,3 +4,4 @@
 - NA-0003 READY — docs/server/DOC-SRV-003_Relay_Inbox_Contract_v1.0.0_DRAFT.md; tests/NA-0003_relay_inbox_contract_plan.md — PR #9 (https://github.com/QuantumShieldLabs/qsl-server/pull/9); Impl PR #10 (https://github.com/QuantumShieldLabs/qsl-server/pull/10).
 - NA-0003 DONE — Impl PR #10 (https://github.com/QuantumShieldLabs/qsl-server/pull/10) merged (merge SHA 0649094990bcd81db61d37c2f91d73653a12d907).
 - NA-0004 READY — docs/server/DOC-SRV-004_Relay_Auth_And_Hardening_Contract_v1.0.0_DRAFT.md; tests/NA-0004_relay_auth_hardening_plan.md — PR #12 (https://github.com/QuantumShieldLabs/qsl-server/pull/12).
+- NA-0004 implementation — PR #13 (https://github.com/QuantumShieldLabs/qsl-server/pull/13).

@@ -38,3 +38,12 @@ Define server-side hardening requirements for relay push/pull endpoints:
 - Compatible with Caddy/reverse-proxy TLS termination in front of relay.
 - Relay remains ciphertext-only and metadata-minimal.
 - Auth token should be injected via environment management (systemd env file / secret manager), not hard-coded.
+
+## Implementation (Current)
+
+- `RELAY_TOKEN` optional auth gate is enforced in push/pull handlers:
+  - missing/invalid token => `401 ERR_UNAUTHORIZED`
+  - valid token => normal flow
+  - auth disabled when `RELAY_TOKEN` is unset/empty
+- Runtime request-path lock poisoning returns deterministic `500 ERR_LOCK_POISON` (no panic).
+- Startup parse/bind/serve panic paths are removed; failures are logged with deterministic error codes.
