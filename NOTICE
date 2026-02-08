@@ -1,0 +1,11 @@
+QuantumShield Relay Server (qsl-server)
+Copyright (c) 2026 QuantumShield Labs
+
+Licensed under AGPL-3.0-only; see LICENSE.
+
+Canonical repositories (reference):
+- qsl-server: https://github.com/QuantumShieldLabs/qsl-server
+- qsl-protocol: https://github.com/QuantumShieldLabs/qsl-protocol
+
+Official proof runs and release verification guidance are tracked in this repository's TRACEABILITY.md and runbook docs.
+Do not trust unaudited binaries.
