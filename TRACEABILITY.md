@@ -8,3 +8,4 @@
 - NA-0004 DONE — Impl PR #13 (https://github.com/QuantumShieldLabs/qsl-server/pull/13) merged (merge SHA 1fa1978f2f30057f34a139d2f01e1e1c61746d96).
 - NA-0005 READY — tests/NA-0005_provenance_lighttouch_plan.md — PR #15 (https://github.com/QuantumShieldLabs/qsl-server/pull/15).
 - NA-0005 implementation — NOTICE; PROVENANCE.md; SIGNED_RELEASES_RUNBOOK.md; tests/NA-0005_provenance_lighttouch_plan.md — PR #16 (https://github.com/QuantumShieldLabs/qsl-server/pull/16).
+- NA-0005 DONE — PR #16 (https://github.com/QuantumShieldLabs/qsl-server/pull/16) merged (merge SHA cfc8e600988dbba40f30a39eda7021efaf8c83d5).
