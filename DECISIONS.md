@@ -18,3 +18,9 @@
   - **Decision:** Define the relay inbox store-and-forward contract before implementing receive behavior.
   - **Rationale:** Ensures ciphertext-only handling, deterministic limits, and explicit retention/auth choices are agreed before code changes.
   - **References:** NA-0003, DOC-SRV-003, tests/NA-0003_relay_inbox_contract_plan.md
+- **ID:** D-0004
+  - **Status:** Accepted
+  - **Date:** 2026-02-08
+  - **Decision:** Prioritize optional relay auth gate and panic-removal hardening as release-blocking server hygiene.
+  - **Rationale:** Public endpoints need deterministic reject behavior under abuse while preserving current no-auth default when token is unset.
+  - **References:** NA-0004, docs/server/DOC-SRV-004_Relay_Auth_And_Hardening_Contract_v1.0.0_DRAFT.md, tests/NA-0004_relay_auth_hardening_plan.md
