@@ -26,4 +26,10 @@ Verification checklist:
 - Checks green (or explicitly captured "no checks reported" before merge decision).
 
 Executed evidence:
-- To be populated with PR links, merge SHAs, and scope guard outputs.
+- Governance READY merged: PR #15 (https://github.com/QuantumShieldLabs/qsl-server/pull/15), merge SHA `8ad098c191ba7e8ca6e2296067304282f6225d1b`.
+- Added root docs:
+  - `NOTICE`
+  - `PROVENANCE.md`
+  - `SIGNED_RELEASES_RUNBOOK.md`
+- Link/auth/runbook inventory command:
+  - `rg -n "QuantumShieldLabs/qsl-server|QuantumShieldLabs/qsl-protocol|Authorization: Bearer|RELAY_TOKEN|sha256sum|git tag -s|git tag -v" NOTICE PROVENANCE.md SIGNED_RELEASES_RUNBOOK.md`
