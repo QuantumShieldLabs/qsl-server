@@ -6,3 +6,4 @@
 - NA-0004 READY — docs/server/DOC-SRV-004_Relay_Auth_And_Hardening_Contract_v1.0.0_DRAFT.md; tests/NA-0004_relay_auth_hardening_plan.md — PR #12 (https://github.com/QuantumShieldLabs/qsl-server/pull/12).
 - NA-0004 implementation — PR #13 (https://github.com/QuantumShieldLabs/qsl-server/pull/13).
 - NA-0004 DONE — Impl PR #13 (https://github.com/QuantumShieldLabs/qsl-server/pull/13) merged (merge SHA 1fa1978f2f30057f34a139d2f01e1e1c61746d96).
+- NA-0005 READY — tests/NA-0005_provenance_lighttouch_plan.md — PR #15 (https://github.com/QuantumShieldLabs/qsl-server/pull/15).
