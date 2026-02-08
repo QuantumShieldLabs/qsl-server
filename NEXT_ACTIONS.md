@@ -120,3 +120,31 @@ Acceptance:
 
 Evidence:
 - Impl PR #13 (https://github.com/QuantumShieldLabs/qsl-server/pull/13) merged (merge SHA 1fa1978f2f30057f34a139d2f01e1e1c61746d96).
+
+### NA-0005 — Provenance light touch: NOTICE + PROVENANCE + signed-release runbook
+
+Status: READY
+Scope: governance files + root docs only (no src/systemd/workflow changes)
+
+Objective:
+- Add a lightweight provenance baseline for qsl-server users:
+  - repository notice + licensing pointer
+  - official-source and verification guidance
+  - signed-tag/checksum runbook instructions
+
+Invariants:
+1) No server runtime behavior changes.
+2) No `src/**`, `systemd/**`, `scripts/**`, `.github/**`, `Cargo.toml`, or `Cargo.lock` edits.
+3) Guidance must be proof-first and fail-closed: do not trust unaudited binaries.
+4) Auth posture statement remains aligned with implemented server behavior (`Authorization: Bearer` required only when `RELAY_TOKEN` is configured).
+
+Deliverables:
+- Add `NOTICE` at repo root.
+- Add `PROVENANCE.md` at repo root.
+- Add `SIGNED_RELEASES_RUNBOOK.md` at repo root.
+- Update `tests/NA-0005_provenance_lighttouch_plan.md` with executed evidence.
+
+Acceptance:
+- Governance, implementation, and close-out PRs are scope-limited and green.
+- TRACEABILITY contains READY/implementation/DONE links and merge SHAs.
+- Queue returns to READY=0 after close-out.

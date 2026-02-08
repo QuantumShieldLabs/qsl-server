@@ -24,3 +24,10 @@
   - **Decision:** Prioritize optional relay auth gate and panic-removal hardening as release-blocking server hygiene.
   - **Rationale:** Public endpoints need deterministic reject behavior under abuse while preserving current no-auth default when token is unset.
   - **References:** NA-0004, docs/server/DOC-SRV-004_Relay_Auth_And_Hardening_Contract_v1.0.0_DRAFT.md, tests/NA-0004_relay_auth_hardening_plan.md
+
+- **ID:** D-0005
+  - **Status:** Accepted
+  - **Date:** 2026-02-08
+  - **Decision:** Adopt proof-first provenance light-touch controls for qsl-server via `NOTICE`, `PROVENANCE.md`, and a signed-releases runbook.
+  - **Rationale:** Operators and users need a clear, repeatable path to verify source authenticity and release provenance without changing server behavior.
+  - **References:** NA-0005, tests/NA-0005_provenance_lighttouch_plan.md
