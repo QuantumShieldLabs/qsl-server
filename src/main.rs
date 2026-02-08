@@ -85,14 +85,28 @@ async fn main() {
 
     let cli = Cli::parse();
     let cfg = resolve_config(cli, EnvVals::from_env());
-    let addr: SocketAddr = format!("{}:{}", cfg.bind, cfg.port).parse().unwrap();
-    let listener = TcpListener::bind(addr).await.unwrap();
+    let addr: SocketAddr = match format!("{}:{}", cfg.bind, cfg.port).parse() {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::error!("ERR_BIND_PARSE");
+            return;
+        }
+    };
+    let listener = match TcpListener::bind(addr).await {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::error!("ERR_BIND_LISTEN");
+            return;
+        }
+    };
 
     let state = AppState::new(cfg.limits);
     let app = app(state);
 
     info!("qsl-server listening on {}", addr);
-    axum::serve(listener, app).await.unwrap();
+    if axum::serve(listener, app).await.is_err() {
+        tracing::error!("ERR_SERVER_RUNTIME");
+    }
 }
 
 #[cfg(test)]

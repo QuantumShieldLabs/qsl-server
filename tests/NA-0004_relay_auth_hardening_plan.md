@@ -39,3 +39,20 @@
 
 - Revert NA-0004 implementation PR if auth gate or panic-removal breaks compatibility.
 - Keep docs and traceability references for audit trail.
+
+## Executed Evidence
+
+- Branch: `na-0004/relay-auth-hardening`
+- Runtime changes:
+  - `src/lib.rs`: optional auth gate in push/pull with deterministic `401 ERR_UNAUTHORIZED` and no-mutation reject behavior.
+  - `src/lib.rs`: lock poison handling returns deterministic `500 ERR_LOCK_POISON` in handlers.
+  - `src/main.rs`: startup parse/bind/serve panic paths removed in favor of deterministic error logging.
+- Added tests:
+  - `auth_disabled_allows_push_pull`
+  - `auth_enabled_missing_token_401_no_mutation`
+  - `auth_enabled_wrong_token_401_no_mutation`
+  - `auth_enabled_correct_token_allows_roundtrip`
+- Local gates run:
+  - `cargo fmt --check` PASS
+  - `cargo test` PASS
+  - `cargo clippy --all-targets -- -D warnings` PASS

@@ -53,13 +53,22 @@ pub struct AppState {
     queues: Arc<Mutex<Queues>>,
 
     limits: Limits,
+    relay_token: Option<String>,
 }
 
 impl AppState {
     pub fn new(limits: Limits) -> Self {
+        Self::new_with_auth(
+            limits,
+            std::env::var("RELAY_TOKEN").ok().filter(|v| !v.is_empty()),
+        )
+    }
+
+    pub fn new_with_auth(limits: Limits, relay_token: Option<String>) -> Self {
         Self {
             queues: Arc::new(Mutex::new(HashMap::new())),
             limits,
+            relay_token,
         }
     }
 }
@@ -92,12 +101,30 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
+fn auth_ok(headers: &HeaderMap, relay_token: Option<&str>) -> bool {
+    match relay_token {
+        None => true,
+        Some(token) => {
+            let Some(raw) = headers.get("authorization").and_then(|v| v.to_str().ok()) else {
+                return false;
+            };
+            let Some(provided) = raw.strip_prefix("Bearer ") else {
+                return false;
+            };
+            provided == token
+        }
+    }
+}
+
 async fn push_message(
     State(st): State<AppState>,
     Path(channel): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    if !auth_ok(&headers, st.relay_token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
+    }
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "ERR_EMPTY_BODY").into_response();
     }
@@ -111,7 +138,9 @@ async fn push_message(
         .filter(|v| !v.trim().is_empty())
         .map(|v| v.to_string())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let mut g = st.queues.lock().unwrap();
+    let Ok(mut g) = st.queues.lock() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "ERR_LOCK_POISON").into_response();
+    };
     let q = g.entry(channel.clone()).or_default();
     if q.len() >= st.limits.max_queue_depth {
         return (StatusCode::TOO_MANY_REQUESTS, "ERR_QUEUE_FULL").into_response();
@@ -132,14 +161,20 @@ async fn push_message(
 async fn pull_message(
     State(st): State<AppState>,
     Path(channel): Path<String>,
+    headers: HeaderMap,
     Query(query): Query<PullQuery>,
 ) -> impl IntoResponse {
+    if !auth_ok(&headers, st.relay_token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
+    }
     let max = query.max.unwrap_or(1);
     if max == 0 {
         return (StatusCode::BAD_REQUEST, "ERR_BAD_MAX").into_response();
     }
     let max = max.min(st.limits.max_queue_depth);
-    let mut g = st.queues.lock().unwrap();
+    let Ok(mut g) = st.queues.lock() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "ERR_LOCK_POISON").into_response();
+    };
     let q = g.entry(channel.clone()).or_default();
     if q.is_empty() {
         return StatusCode::NO_CONTENT.into_response();
@@ -174,7 +209,7 @@ mod tests {
 
     impl std::io::Write for SharedWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            let mut g = self.0.lock().unwrap();
+            let mut g = self.0.lock().unwrap_or_else(|e| panic!("{e}"));
             g.extend_from_slice(buf);
             Ok(buf.len())
         }
@@ -184,15 +219,26 @@ mod tests {
         }
     }
 
-    async fn spawn_server(limits: Limits) -> (String, tokio::task::JoinHandle<()>) {
-        let state = AppState::new(limits);
+    async fn spawn_server_with_token(
+        limits: Limits,
+        relay_token: Option<String>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let state = AppState::new_with_auth(limits, relay_token);
         let app = app(state);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let addr = listener.local_addr().unwrap_or_else(|e| panic!("{e}"));
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
+            axum::serve(listener, app)
+                .await
+                .unwrap_or_else(|e| panic!("{e}"));
         });
         (format!("http://{}", addr), handle)
+    }
+
+    async fn spawn_server(limits: Limits) -> (String, tokio::task::JoinHandle<()>) {
+        spawn_server_with_token(limits, None).await
     }
 
     #[derive(Deserialize)]
@@ -221,16 +267,16 @@ mod tests {
             .body(payload.clone())
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(push.status(), ReqStatus::OK);
 
         let pull = client
             .get(format!("{}/v1/pull/test?max=1", base))
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(pull.status(), ReqStatus::OK);
-        let body: PullResp = pull.json().await.unwrap();
+        let body: PullResp = pull.json().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body.items.len(), 1);
         assert!(!body.items[0].id.is_empty());
         assert_eq!(body.items[0].data.as_slice(), payload.as_slice());
@@ -250,7 +296,7 @@ mod tests {
             .get(format!("{}/v1/pull/empty?max=1", base))
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(pull.status(), ReqStatus::NO_CONTENT);
         handle.abort();
     }
@@ -268,16 +314,16 @@ mod tests {
             .body(vec![0u8; 5])
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(push.status(), ReqStatus::PAYLOAD_TOO_LARGE);
-        let body = push.text().await.unwrap();
+        let body = push.text().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body, "ERR_TOO_LARGE");
 
         let pull = client
             .get(format!("{}/v1/pull/oversize?max=1", base))
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(pull.status(), ReqStatus::NO_CONTENT);
         handle.abort();
     }
@@ -295,7 +341,7 @@ mod tests {
             .body(b"a".to_vec())
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r1.status(), ReqStatus::OK);
 
         let r2 = client
@@ -303,18 +349,18 @@ mod tests {
             .body(b"b".to_vec())
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r2.status(), ReqStatus::TOO_MANY_REQUESTS);
-        let body = r2.text().await.unwrap();
+        let body = r2.text().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body, "ERR_QUEUE_FULL");
 
         let pull1 = client
             .get(format!("{}/v1/pull/qfull?max=1", base))
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(pull1.status(), ReqStatus::OK);
-        let body1: PullResp = pull1.json().await.unwrap();
+        let body1: PullResp = pull1.json().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body1.items.len(), 1);
         assert!(!body1.items[0].id.is_empty());
 
@@ -322,7 +368,7 @@ mod tests {
             .get(format!("{}/v1/pull/qfull?max=1", base))
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(pull2.status(), ReqStatus::NO_CONTENT);
         handle.abort();
     }
@@ -341,30 +387,30 @@ mod tests {
             .body(b"a".to_vec())
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         let _ = client
             .post(format!("{}/v1/push/two", base))
             .body(b"b".to_vec())
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
 
         let pull1 = client
             .get(format!("{}/v1/pull/two?max=1", base))
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(pull1.status(), ReqStatus::OK);
-        let body1: PullResp = pull1.json().await.unwrap();
+        let body1: PullResp = pull1.json().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body1.items.len(), 1);
 
         let pull2 = client
             .get(format!("{}/v1/pull/two?max=2", base))
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(pull2.status(), ReqStatus::OK);
-        let body2: PullResp = pull2.json().await.unwrap();
+        let body2: PullResp = pull2.json().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body2.items.len(), 1);
         assert!(!body2.items[0].id.is_empty());
 
@@ -372,7 +418,7 @@ mod tests {
             .get(format!("{}/v1/pull/two?max=1", base))
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(pull3.status(), ReqStatus::NO_CONTENT);
 
         handle.abort();
@@ -400,12 +446,159 @@ mod tests {
             .body(payload)
             .send()
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
 
         handle.abort();
 
-        let binding = buf.lock().unwrap();
+        let binding = buf.lock().unwrap_or_else(|e| panic!("{e}"));
         let logged = String::from_utf8_lossy(&binding);
         assert!(!logged.contains("SECRET_PAYLOAD_ABC"));
+    }
+
+    #[tokio::test]
+    async fn auth_disabled_allows_push_pull() {
+        let (base, handle) = spawn_server_with_token(
+            Limits {
+                max_body_bytes: 1024 * 1024,
+                max_queue_depth: 8,
+            },
+            None,
+        )
+        .await;
+        let client = reqwest::Client::new();
+        let payload = b"auth-disabled".to_vec();
+
+        let push = client
+            .post(format!("{}/v1/push/open", base))
+            .body(payload.clone())
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(push.status(), ReqStatus::OK);
+
+        let pull = client
+            .get(format!("{}/v1/pull/open?max=1", base))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pull.status(), ReqStatus::OK);
+        let body: PullResp = pull.json().await.unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(body.items.len(), 1);
+        assert_eq!(body.items[0].data.as_slice(), payload.as_slice());
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn auth_enabled_missing_token_401_no_mutation() {
+        let (base, handle) = spawn_server_with_token(
+            Limits {
+                max_body_bytes: 1024 * 1024,
+                max_queue_depth: 8,
+            },
+            Some("topsecret".to_string()),
+        )
+        .await;
+        let client = reqwest::Client::new();
+
+        let push = client
+            .post(format!("{}/v1/push/auth", base))
+            .body(b"x".to_vec())
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(push.status(), ReqStatus::UNAUTHORIZED);
+        assert_eq!(
+            push.text().await.unwrap_or_else(|e| panic!("{e}")),
+            "ERR_UNAUTHORIZED"
+        );
+
+        let pull = client
+            .get(format!("{}/v1/pull/auth?max=1", base))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pull.status(), ReqStatus::UNAUTHORIZED);
+        assert_eq!(
+            pull.text().await.unwrap_or_else(|e| panic!("{e}")),
+            "ERR_UNAUTHORIZED"
+        );
+
+        let pull_ok = client
+            .get(format!("{}/v1/pull/auth?max=1", base))
+            .header("Authorization", "Bearer topsecret")
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pull_ok.status(), ReqStatus::NO_CONTENT);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn auth_enabled_wrong_token_401_no_mutation() {
+        let (base, handle) = spawn_server_with_token(
+            Limits {
+                max_body_bytes: 1024 * 1024,
+                max_queue_depth: 8,
+            },
+            Some("topsecret".to_string()),
+        )
+        .await;
+        let client = reqwest::Client::new();
+        let push = client
+            .post(format!("{}/v1/push/auth", base))
+            .header("Authorization", "Bearer wrong")
+            .body(b"x".to_vec())
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(push.status(), ReqStatus::UNAUTHORIZED);
+        assert_eq!(
+            push.text().await.unwrap_or_else(|e| panic!("{e}")),
+            "ERR_UNAUTHORIZED"
+        );
+
+        let pull_ok = client
+            .get(format!("{}/v1/pull/auth?max=1", base))
+            .header("Authorization", "Bearer topsecret")
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pull_ok.status(), ReqStatus::NO_CONTENT);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn auth_enabled_correct_token_allows_roundtrip() {
+        let (base, handle) = spawn_server_with_token(
+            Limits {
+                max_body_bytes: 1024 * 1024,
+                max_queue_depth: 8,
+            },
+            Some("topsecret".to_string()),
+        )
+        .await;
+        let client = reqwest::Client::new();
+        let payload = b"auth-enabled".to_vec();
+
+        let push = client
+            .post(format!("{}/v1/push/authok", base))
+            .header("Authorization", "Bearer topsecret")
+            .body(payload.clone())
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(push.status(), ReqStatus::OK);
+
+        let pull = client
+            .get(format!("{}/v1/pull/authok?max=1", base))
+            .header("Authorization", "Bearer topsecret")
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pull.status(), ReqStatus::OK);
+        let body: PullResp = pull.json().await.unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(body.items.len(), 1);
+        assert_eq!(body.items[0].data.as_slice(), payload.as_slice());
+        handle.abort();
     }
 }
