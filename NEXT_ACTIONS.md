@@ -92,3 +92,28 @@ Acceptance:
 
 Evidence:
 - Impl PR #10 (https://github.com/QuantumShieldLabs/qsl-server/pull/10) merged (merge SHA 0649094990bcd81db61d37c2f91d73653a12d907).
+
+### NA-0004 — Server hardening: optional auth gate + remove unwrap/panic paths + deterministic rejects + test-backed
+
+Status: READY
+Scope: server code + tests (implementation PR later). No protocol/client changes.
+
+What is protected:
+- Public relay reliability and abuse resistance.
+- Deterministic behavior under malformed/hostile input.
+
+Invariants:
+1) Optional auth gate:
+   - If `RELAY_TOKEN` is configured, push/pull MUST require `Authorization: Bearer <token>`.
+   - Missing/invalid token => deterministic `401 ERR_UNAUTHORIZED` (no mutation).
+   - If `RELAY_TOKEN` is NOT configured, auth remains disabled (current behavior).
+2) No panics/unwraps in runtime paths (startup and handlers); deterministic errors instead.
+3) No payload logging (maintained invariant).
+4) Bounded limits remain enforced (`413` too large, `429` queue full).
+
+Acceptance:
+- Tests cover:
+  - auth disabled => push/pull ok
+  - auth enabled => missing token `401`, wrong token `401`, correct token ok
+  - no unwrap/panic paths remain (clippy/grep + tests)
+- `cargo fmt`, `cargo test`, `cargo clippy` pass; CI (if present) green.
