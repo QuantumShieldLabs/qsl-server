@@ -101,6 +101,16 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
+fn channel_log_id(channel: &str) -> String {
+    // Deterministic redaction-safe identifier (FNV-1a 64-bit rendered as hex).
+    let mut state: u64 = 0xcbf29ce484222325;
+    for b in channel.as_bytes() {
+        state ^= u64::from(*b);
+        state = state.wrapping_mul(0x100000001b3);
+    }
+    format!("{state:016x}")
+}
+
 fn auth_ok(headers: &HeaderMap, relay_token: Option<&str>) -> bool {
     match relay_token {
         None => true,
@@ -149,8 +159,8 @@ async fn push_message(
 
     // Never log payload; metadata only.
     info!(
-        "push channel={} id={} bytes={}",
-        channel,
+        "push channel_id={} id={} bytes={}",
+        channel_log_id(&channel),
         msg_id,
         body.len()
     );
@@ -183,8 +193,8 @@ async fn pull_message(
     for _ in 0..max {
         if let Some((msg_id, data)) = q.pop_front() {
             info!(
-                "pull channel={} id={} bytes={}",
-                channel,
+                "pull channel_id={} id={} bytes={}",
+                channel_log_id(&channel),
                 msg_id,
                 data.len()
             );
@@ -453,6 +463,56 @@ mod tests {
         let binding = buf.lock().unwrap_or_else(|e| panic!("{e}"));
         let logged = String::from_utf8_lossy(&binding);
         assert!(!logged.contains("SECRET_PAYLOAD_ABC"));
+    }
+
+    #[test]
+    fn channel_log_id_is_deterministic_and_redacted() {
+        let raw = "alice-route-token-123";
+        let id1 = channel_log_id(raw);
+        let id2 = channel_log_id(raw);
+        assert_eq!(id1, id2);
+        assert_eq!(id1.len(), 16);
+        assert_ne!(id1, raw);
+    }
+
+    #[tokio::test]
+    async fn logs_do_not_contain_raw_channel() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = SharedWriter(buf.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = set_default(subscriber);
+
+        let channel = "route-token-sensitive";
+        let (base, handle) = spawn_server(Limits {
+            max_body_bytes: 1024 * 1024,
+            max_queue_depth: 8,
+        })
+        .await;
+        let client = reqwest::Client::new();
+        let payload = b"log-redaction".to_vec();
+        let push = client
+            .post(format!("{}/v1/push/{}", base, channel))
+            .body(payload)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(push.status(), ReqStatus::OK);
+        let pull = client
+            .get(format!("{}/v1/pull/{}?max=1", base, channel))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pull.status(), ReqStatus::OK);
+
+        handle.abort();
+
+        let binding = buf.lock().unwrap_or_else(|e| panic!("{e}"));
+        let logged = String::from_utf8_lossy(&binding);
+        assert!(!logged.contains(channel));
+        assert!(logged.contains("channel_id="));
     }
 
     #[tokio::test]

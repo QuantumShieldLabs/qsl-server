@@ -19,7 +19,7 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 ## Run (local)
 ```bash
 cargo run
-# listens on 0.0.0.0:8080 by default
+# listens on 127.0.0.1:8080 by default
 ```
 
 CLI overrides env, env overrides defaults:
@@ -28,18 +28,27 @@ CLI overrides env, env overrides defaults:
 qsl-server --bind 0.0.0.0 --port 8080 --max-body-bytes 1048576 --max-queue-depth 256
 ```
 
+Environment defaults:
+- `BIND_ADDR=127.0.0.1` (safe default, explicit opt-in needed for public bind)
+- `PORT=8080`
+
 ## Remote deployment (Ubuntu 24.04 + systemd)
 
-The repo includes a reproducible install script and a systemd unit template.
+The repo includes reproducible install/update scripts and packaging templates.
 
 ```bash
 # copy scripts to the host, then run as root:
-sudo bash scripts/install_ubuntu_24_04_systemd.sh
+sudo bash scripts/install_ubuntu.sh /path/to/qsl-server
+# later updates:
+sudo bash scripts/update_ubuntu.sh /path/to/qsl-server
 ```
 
 Artifacts:
-- systemd unit: `systemd/qsl-server.service`
-- install script: `scripts/install_ubuntu_24_04_systemd.sh`
+- systemd unit: `packaging/systemd/qsl-server.service`
+- env template: `packaging/systemd/relay.env.example`
+- caddy example: `packaging/caddy/Caddyfile.example`
+- install script: `scripts/install_ubuntu.sh`
+- update script: `scripts/update_ubuntu.sh`
 - verify script: `scripts/verify_remote.sh`
 
 ### Firewall notes (example)
