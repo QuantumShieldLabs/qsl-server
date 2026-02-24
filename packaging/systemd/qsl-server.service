@@ -1,0 +1,28 @@
+[Unit]
+Description=QSL Transport-only Relay
+After=network.target
+
+[Service]
+Type=simple
+User=qslrelay
+Group=qslrelay
+WorkingDirectory=/opt/qsl-server
+EnvironmentFile=/etc/qsl-server/relay.env
+ExecStart=/opt/qsl-server/bin/qsl-server
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/qsl-server /etc/qsl-server
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

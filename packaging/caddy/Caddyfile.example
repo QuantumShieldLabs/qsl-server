@@ -1,0 +1,17 @@
+# Example reverse-proxy configuration for qsl-server.
+# Keep qsl-server bound to loopback (127.0.0.1:8080) and expose public TLS here.
+
+relay.example.com {
+    encode gzip
+
+    # Avoid logging request URIs for relay API paths because channel IDs are
+    # capability-like tokens. If access logs are required, prefer redaction.
+    @relay_api path /v1/*
+    handle @relay_api {
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    handle {
+        respond 404
+    }
+}
