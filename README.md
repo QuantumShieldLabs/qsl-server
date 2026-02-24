@@ -47,8 +47,10 @@ Artifacts:
 - systemd unit: `packaging/systemd/qsl-server.service`
 - env template: `packaging/systemd/relay.env.example`
 - caddy example: `packaging/caddy/Caddyfile.example`
+- production runbook: `packaging/runbook_ubuntu.md`
 - install script: `scripts/install_ubuntu.sh`
 - update script: `scripts/update_ubuntu.sh`
+- audit script: `scripts/qsl_relay_audit.sh`
 - verify script: `scripts/verify_remote.sh`
 
 ### Firewall notes (example)
