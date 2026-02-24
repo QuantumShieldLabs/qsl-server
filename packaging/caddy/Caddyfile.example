@@ -4,12 +4,12 @@
 relay.example.com {
     encode gzip
 
-    # Avoid logging request URIs for relay API paths because channel IDs are
-    # capability-like tokens. If access logs are required, prefer redaction.
+    # /v1 paths include capability-like route tokens in the URI. Do not log
+    # these request URIs in access logs.
     @relay_api path /v1/*
-    handle @relay_api {
-        reverse_proxy 127.0.0.1:8080
-    }
+    log_skip @relay_api
+
+    reverse_proxy 127.0.0.1:8080
 
     handle {
         respond 404
