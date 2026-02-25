@@ -1,0 +1,43 @@
+name: release-linux
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release binary
+        run: cargo build --release --locked
+      - name: Package release artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/qsl-server dist/qsl-server-linux-x86_64
+          chmod 0755 dist/qsl-server-linux-x86_64
+          sha256sum dist/qsl-server-linux-x86_64 > dist/qsl-server-linux-x86_64.sha256
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qsl-server-linux-x86_64
+          path: |
+            dist/qsl-server-linux-x86_64
+            dist/qsl-server-linux-x86_64.sha256
+      - name: Publish GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          gh release upload "$tag" \
+            dist/qsl-server-linux-x86_64 \
+            dist/qsl-server-linux-x86_64.sha256 \
+            --clobber

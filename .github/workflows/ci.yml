@@ -12,6 +12,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: checksum update enforcement
+        run: bash scripts/ci/test_update_checksum.sh
       - name: fmt
         run: cargo fmt --all -- --check
       - name: test

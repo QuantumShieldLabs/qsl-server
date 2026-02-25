@@ -50,6 +50,7 @@ Artifacts:
 - production runbook: `packaging/runbook_ubuntu.md`
 - install script: `scripts/install_ubuntu.sh`
 - update script: `scripts/update_ubuntu.sh`
+- checksum-verified release update: `scripts/update_from_release.sh --release vX.Y.Z`
 - audit script: `scripts/qsl_relay_audit.sh`
 - verify script: `scripts/verify_remote.sh`
 

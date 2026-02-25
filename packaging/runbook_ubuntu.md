@@ -51,7 +51,21 @@ Use `packaging/caddy/Caddyfile.example` as baseline.
 
 Restart Caddy after config changes.
 
-## 5) Update flow
+## 5) Update flow (recommended: checksum-verified release artifact)
+One-command update from a signed GitHub release tag:
+
+```bash
+cd /path/to/qsl-server
+sudo bash scripts/update_from_release.sh --release vX.Y.Z
+```
+
+This path is fail-closed:
+- downloads `qsl-server-linux-x86_64` and `qsl-server-linux-x86_64.sha256`
+- verifies SHA256 before any service stop/replacement
+- applies atomic install with rollback on start failure
+
+Fallback (build-from-source on host):
+
 ```bash
 cd /path/to/qsl-server
 cargo build --release
