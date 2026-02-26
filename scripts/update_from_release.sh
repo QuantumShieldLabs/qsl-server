@@ -94,6 +94,7 @@ BIN_DST="${BIN_DIR}/${BIN_NAME}"
 TMP_DIR="$(mktemp -d)"
 ARTIFACT_TMP="${TMP_DIR}/${ARTIFACT_NAME}"
 CHECKSUM_TMP="${TMP_DIR}/${ARTIFACT_NAME}.sha256"
+CHECKSUM_NORMALIZED="${TMP_DIR}/${ARTIFACT_NAME}.normalized.sha256"
 BACKUP_TMP="${TMP_DIR}/${BIN_NAME}.backup"
 
 cleanup() {
@@ -106,11 +107,26 @@ install -d -m 0755 "$BIN_DIR"
 download_file "$ARTIFACT_URL" "$ARTIFACT_TMP" || fail "$ERR_DOWNLOAD" "failed to download artifact"
 download_file "$CHECKSUM_URL" "$CHECKSUM_TMP" || fail "$ERR_DOWNLOAD" "failed to download checksum"
 
-if ! grep -Eq "^[0-9a-fA-F]{64}[[:space:]]+${ARTIFACT_NAME}$" "$CHECKSUM_TMP"; then
+mapfile -t checksum_lines < "$CHECKSUM_TMP"
+if [[ "${#checksum_lines[@]}" -ne 1 ]]; then
+  fail "$ERR_INPUT" "checksum file must contain exactly one line"
+fi
+
+checksum_line="${checksum_lines[0]}"
+if ! [[ "$checksum_line" =~ ^([0-9a-fA-F]{64})[[:space:]]+(.+)$ ]]; then
   fail "$ERR_INPUT" "checksum file format invalid"
 fi
 
-if ! (cd "$TMP_DIR" && sha256sum -c "$CHECKSUM_TMP" >/dev/null); then
+checksum_hex="${BASH_REMATCH[1]}"
+checksum_name_raw="${BASH_REMATCH[2]}"
+checksum_name="${checksum_name_raw##*/}"
+if [[ "$checksum_name" != "$ARTIFACT_NAME" ]]; then
+  fail "$ERR_INPUT" "checksum file references unsupported artifact"
+fi
+
+printf '%s  %s\n' "$checksum_hex" "$ARTIFACT_NAME" > "$CHECKSUM_NORMALIZED"
+
+if ! (cd "$TMP_DIR" && sha256sum -c "$CHECKSUM_NORMALIZED" >/dev/null); then
   fail "$ERR_CHECKSUM" "checksum verification failed"
 fi
 
