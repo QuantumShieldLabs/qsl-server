@@ -22,7 +22,7 @@ jobs:
           mkdir -p dist
           cp target/release/qsl-server dist/qsl-server-linux-x86_64
           chmod 0755 dist/qsl-server-linux-x86_64
-          sha256sum dist/qsl-server-linux-x86_64 > dist/qsl-server-linux-x86_64.sha256
+          (cd dist && sha256sum qsl-server-linux-x86_64 > qsl-server-linux-x86_64.sha256)
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:

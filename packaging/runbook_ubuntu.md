@@ -56,7 +56,7 @@ One-command update from a signed GitHub release tag:
 
 ```bash
 cd /path/to/qsl-server
-sudo bash scripts/update_from_release.sh --release vX.Y.Z
+sudo bash scripts/update_from_release.sh --release v0.0.3
 ```
 
 This path is fail-closed:

@@ -49,4 +49,39 @@ if ! grep -q "new-binary" "${BASE_DIR}/bin/qsl-server"; then
   exit 1
 fi
 
+printf 'old-binary\n' > "${BASE_DIR}/bin/qsl-server"
+cp "${BASE_DIR}/bin/qsl-server" "${TMP_DIR}/old.copy.dist"
+(cd "${TMP_DIR}" && sha256sum "qsl-server-linux-x86_64" | sed 's# qsl-server-linux-x86_64$# dist/qsl-server-linux-x86_64#' > "qsl-server-linux-x86_64.sha256")
+
+bash "$UPDATE_SCRIPT" \
+  --artifact-url "file://${TMP_DIR}/qsl-server-linux-x86_64" \
+  --checksum-url "file://${TMP_DIR}/qsl-server-linux-x86_64.sha256" \
+  --base-dir "$BASE_DIR" \
+  --no-systemctl
+
+if ! grep -q "new-binary" "${BASE_DIR}/bin/qsl-server"; then
+  echo "expected dist/ checksum filename to pass"
+  exit 1
+fi
+
+printf 'old-binary\n' > "${BASE_DIR}/bin/qsl-server"
+cp "${BASE_DIR}/bin/qsl-server" "${TMP_DIR}/old.copy.evil"
+(cd "${TMP_DIR}" && sha256sum "qsl-server-linux-x86_64" | sed 's# qsl-server-linux-x86_64$# dist/evil.bin#' > "qsl-server-linux-x86_64.sha256")
+
+set +e
+bash "$UPDATE_SCRIPT" \
+  --artifact-url "file://${TMP_DIR}/qsl-server-linux-x86_64" \
+  --checksum-url "file://${TMP_DIR}/qsl-server-linux-x86_64.sha256" \
+  --base-dir "$BASE_DIR" \
+  --no-systemctl
+rc=$?
+set -e
+
+if [[ "$rc" -eq 0 ]]; then
+  echo "expected wrong basename checksum to fail"
+  exit 1
+fi
+
+cmp "${BASE_DIR}/bin/qsl-server" "${TMP_DIR}/old.copy.evil"
+
 echo "checksum enforcement test passed"
