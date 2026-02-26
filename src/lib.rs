@@ -153,7 +153,12 @@ async fn push_message(
     };
     let q = g.entry(channel.clone()).or_default();
     if q.len() >= st.limits.max_queue_depth {
-        return (StatusCode::TOO_MANY_REQUESTS, "ERR_QUEUE_FULL").into_response();
+        info!(
+            "event=overloaded queue_depth={} max={}",
+            q.len(),
+            st.limits.max_queue_depth
+        );
+        return (StatusCode::TOO_MANY_REQUESTS, "ERR_OVERLOADED").into_response();
     }
     q.push_back((msg_id.clone(), body.to_vec()));
 
@@ -362,7 +367,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r2.status(), ReqStatus::TOO_MANY_REQUESTS);
         let body = r2.text().await.unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(body, "ERR_QUEUE_FULL");
+        assert_eq!(body, "ERR_OVERLOADED");
 
         let pull1 = client
             .get(format!("{}/v1/pull/qfull?max=1", base))
@@ -513,6 +518,66 @@ mod tests {
         let logged = String::from_utf8_lossy(&binding);
         assert!(!logged.contains(channel));
         assert!(logged.contains("channel_id="));
+    }
+
+    #[tokio::test]
+    async fn overload_logs_are_safe_and_structured() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = SharedWriter(buf.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = set_default(subscriber);
+
+        let channel = "route-token-super-sensitive-aaaaaaaaaaaaaaaaaaaa";
+        let (base, handle) = spawn_server(Limits {
+            max_body_bytes: 1024 * 1024,
+            max_queue_depth: 1,
+        })
+        .await;
+        let client = reqwest::Client::new();
+
+        let first = client
+            .post(format!("{}/v1/push/{}", base, channel))
+            .body(b"a".to_vec())
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(first.status(), ReqStatus::OK);
+
+        let second = client
+            .post(format!("{}/v1/push/{}", base, channel))
+            .body(b"b".to_vec())
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(second.status(), ReqStatus::TOO_MANY_REQUESTS);
+        let body = second.text().await.unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(body, "ERR_OVERLOADED");
+
+        handle.abort();
+
+        let binding = buf.lock().unwrap_or_else(|e| panic!("{e}"));
+        let logged = String::from_utf8_lossy(&binding);
+        assert!(logged.contains("event=overloaded"));
+        assert!(logged.contains("queue_depth="));
+        assert!(logged.contains("max="));
+        assert!(!logged.contains(channel));
+        let mut run = 0usize;
+        let mut has_long_hex = false;
+        for ch in logged.chars() {
+            if (ch.is_ascii_hexdigit() && ch.is_ascii_lowercase()) || ch.is_ascii_digit() {
+                run += 1;
+                if run >= 32 {
+                    has_long_hex = true;
+                    break;
+                }
+            } else {
+                run = 0;
+            }
+        }
+        assert!(!has_long_hex);
     }
 
     #[tokio::test]
