@@ -118,6 +118,6 @@ async fn queue_full_returns_429() {
         .unwrap();
     assert_eq!(r2.status(), ReqStatus::TOO_MANY_REQUESTS);
     let body = r2.text().await.unwrap();
-    assert_eq!(body, "ERR_QUEUE_FULL");
+    assert_eq!(body, "ERR_OVERLOADED");
     handle.abort();
 }

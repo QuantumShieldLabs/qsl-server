@@ -13,7 +13,7 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 
 ## Behavior and limits
 - `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`
-- `MAX_QUEUE_DEPTH` (default 256) → 429 + `ERR_QUEUE_FULL`
+- `MAX_QUEUE_DEPTH` (default 256) → 429 + `ERR_OVERLOADED`
 - Empty body → 400 + `ERR_EMPTY_BODY`
 
 ## Run (local)
