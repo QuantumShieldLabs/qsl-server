@@ -52,7 +52,7 @@ bash "$WRAPPER_SCRIPT" \
   --caddy-log "$CADDY_LOG" \
   > "$pass_log" 2>&1
 
-rg -q "QSL_AWS_UPDATE_RESULT PASS code=ok" "$pass_log"
+grep -q "QSL_AWS_UPDATE_RESULT PASS code=ok" "$pass_log"
 if ! grep -q "new-binary" "${BASE_DIR}/bin/qsl-server"; then
   echo "expected updated binary content on success path"
   exit 1
@@ -83,7 +83,7 @@ if [[ "$rc" -eq 0 ]]; then
   exit 1
 fi
 
-rg -q "QSL_AWS_UPDATE_RESULT FAIL code=" "$fail_log"
+grep -q "QSL_AWS_UPDATE_RESULT FAIL code=" "$fail_log"
 cmp "${BASE_DIR}/bin/qsl-server" "${TMP_DIR}/old-fail.copy"
 
 echo "aws update wrapper CI test passed"
