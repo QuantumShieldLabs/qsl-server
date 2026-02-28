@@ -12,6 +12,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: aws wrapper enforcement
+        run: bash scripts/ci/test_aws_update_and_verify.sh
       - name: checksum update enforcement
         run: bash scripts/ci/test_update_checksum.sh
       - name: fmt

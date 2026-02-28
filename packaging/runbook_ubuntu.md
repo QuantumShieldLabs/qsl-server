@@ -51,18 +51,19 @@ Use `packaging/caddy/Caddyfile.example` as baseline.
 
 Restart Caddy after config changes.
 
-## 5) Update flow (recommended: checksum-verified release artifact)
-One-command update from a signed GitHub release tag:
+## 5) Update flow (recommended: one-command wrapper with backup + verify)
+One-command update from a release tag with preflight, backup, checksum verify, and post-checks:
 
 ```bash
 cd /path/to/qsl-server
-sudo bash scripts/update_from_release.sh --release v0.0.3
+sudo bash scripts/aws_update_and_verify.sh --release v0.0.3 --repo QuantumShieldLabs/qsl-server --base-dir /opt/qsl-server
 ```
 
-This path is fail-closed:
-- downloads `qsl-server-linux-x86_64` and `qsl-server-linux-x86_64.sha256`
-- verifies SHA256 before any service stop/replacement
-- applies atomic install with rollback on start failure
+Marker meanings:
+- `QSL_AWS_UPDATE_STEP=<name> status=ok|fail` tracks each deterministic phase.
+- `QSL_AWS_UPDATE_RESULT PASS|FAIL code=<reason>` is the final outcome.
+
+Backups are stored under `/root/qsl-backups/<UTC_TIMESTAMP>` by default (override with `--backup-dir`).
 
 Fallback (build-from-source on host):
 
@@ -79,10 +80,10 @@ sudo ss -lntp | rg ':8080|:443|:80'
 ```
 
 ## 6) Rollback
-If a release fails, redeploy the previous known-good binary and restart:
+If a release fails, use the latest backup copy and restart:
 
 ```bash
-sudo cp /path/to/previous/qsl-server /opt/qsl-server/bin/qsl-server
+sudo cp /root/qsl-backups/<UTC_TIMESTAMP>/qsl-server.bin /opt/qsl-server/bin/qsl-server
 sudo systemctl restart qsl-server
 sudo systemctl status qsl-server --no-pager
 ```
