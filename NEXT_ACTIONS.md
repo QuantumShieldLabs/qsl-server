@@ -264,3 +264,30 @@ Evidence:
   - The direct follow-on requirements are defined docs-first: compatibility window or equivalent safe transition, log-safety requirements, operator/runbook changes, and deterministic validation expectations.
 - Evidence hygiene:
   - Docs/design scope only; no `src/**`, `Cargo.toml`, `Cargo.lock`, `.github/workflows/**`, runtime/API/auth behavior, or relay semantics changed, and no raw route tokens were committed.
+
+### NA-0009 — Route-Token Migration + Compatibility Rollout
+
+Status: READY
+Scope: qsl-server runtime/API/docs/tests only for route-token carriage migration; compatibility-preserving rollout; no `Cargo.*` unless strictly needed for tests; no workflows; no unrelated API/auth/runtime redesign
+
+Problem:
+- qsl-server still accepts only URL-embedded route tokens in `/v1/push/:channel` and `/v1/pull/:channel`, so supported operator and client flows still normalize capability-like route tokens in request URIs even after the design review concluded the shape should migrate.
+
+Invariants:
+1) Introduce canonical header-based carriage with token-free paths (`POST /v1/push`, `GET /v1/pull?max=N`) while preserving a compatibility window for the legacy path-based shape.
+2) `Authorization: Bearer ...` remains reserved for relay auth only; no auth semantic change.
+3) Legacy/path + canonical/header mismatch must fail closed with deterministic reject and no mutation.
+4) No raw route-token values in logs, traces, examples, screenshots, or support artifacts.
+5) No unrelated API, auth, or relay-semantic redesign.
+
+Deliverables:
+- Implement canonical `X-QSL-Route-Token` header carriage on token-free `/v1/push` and `/v1/pull`.
+- Preserve legacy `/v1/push/:channel` and `/v1/pull/:channel` during the compatibility window with deterministic mismatch handling.
+- Update operator/docs/examples to the header-based canonical flow and record deprecation/removal criteria for the legacy path.
+- Add deterministic compatibility and log-safety validation.
+
+Acceptance:
+- Canonical header-based push/pull works and legacy path-based push/pull still works during the compatibility window.
+- Missing/empty canonical header and path/header mismatch cases reject deterministically with no mutation.
+- Relay bearer auth behavior is unchanged.
+- Queue returns to READY=0 after close-out.
