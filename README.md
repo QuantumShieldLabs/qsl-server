@@ -68,6 +68,8 @@ sudo bash scripts/verify_remote.sh
 The verify script checks:
 - systemd active status
 - listener on port 8080
+- deployed binary metadata from `/opt/qsl-server/DEPLOYMENT_INFO`
+- installed binary checksum
 - push/pull sanity
 - deployed git HEAD
 

@@ -16,6 +16,9 @@ RELEASE_TAG=""
 ARTIFACT_URL=""
 CHECKSUM_URL=""
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/deploy_metadata.sh"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -157,3 +160,11 @@ if [[ "$NO_SYSTEMCTL" -eq 0 ]]; then
   fi
   systemctl --no-pager --full status qsl-server
 fi
+
+deploy_source_kind="custom_artifact"
+deploy_source_value="$ARTIFACT_NAME"
+if [[ -n "$RELEASE_TAG" ]]; then
+  deploy_source_kind="release_tag"
+  deploy_source_value="$RELEASE_TAG"
+fi
+write_deploy_metadata "$BASE_DIR" "$deploy_source_kind" "$deploy_source_value"

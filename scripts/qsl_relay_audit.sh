@@ -14,6 +14,7 @@ echo "[os]"
 uname -a
 
 ENV_FILE="/etc/qsl-server/relay.env"
+DEPLOY_INFO="/opt/qsl-server/DEPLOYMENT_INFO"
 CADDY_CONF_DEFAULT="/etc/caddy/Caddyfile"
 
 echo
@@ -37,6 +38,14 @@ if [[ -f "$ENV_FILE" ]]; then
   fi
 else
   echo "$ENV_FILE missing"
+fi
+
+echo
+echo "[deployment metadata]"
+if [[ -f "$DEPLOY_INFO" ]]; then
+  sed -n '1,40p' "$DEPLOY_INFO"
+else
+  echo "$DEPLOY_INFO missing"
 fi
 
 echo

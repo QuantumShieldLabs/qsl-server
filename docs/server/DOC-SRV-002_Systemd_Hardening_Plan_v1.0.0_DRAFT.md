@@ -53,5 +53,5 @@ Notes:
 - Re-run verify script to confirm service health.
 
 ## Implementation status (NA-0002)
-- Hardening stanza applied in `systemd/qsl-server.service` (see unit for exact values).
+- Hardening stanza applied in `packaging/systemd/qsl-server.service` (see unit for exact values).
 - Any incompatible directives should be documented with rationale in the follow-on PR.

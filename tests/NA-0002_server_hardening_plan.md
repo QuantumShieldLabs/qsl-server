@@ -34,5 +34,5 @@
   - cargo fmt --check
   - cargo test
   - cargo clippy --all-targets -- -D warnings
-- Systemd hardening stanza applied in systemd/qsl-server.service
+- Systemd hardening stanza applied in packaging/systemd/qsl-server.service
 - OUT_DIR: /home/victor/work/qsl/_forensics/na0002_impl_20260130T011856Z

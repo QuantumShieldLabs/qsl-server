@@ -26,6 +26,7 @@ Installed artifacts:
 - Binary: `/opt/qsl-server/bin/qsl-server`
 - Service: `/etc/systemd/system/qsl-server.service`
 - Env file: `/etc/qsl-server/relay.env`
+- Deployment metadata: `/opt/qsl-server/DEPLOYMENT_INFO`
 
 ## 3) Configure relay env
 Edit `/etc/qsl-server/relay.env`:
@@ -64,6 +65,7 @@ Marker meanings:
 - `QSL_AWS_UPDATE_RESULT PASS|FAIL code=<reason>` is the final outcome.
 
 Backups are stored under `/root/qsl-backups/<UTC_TIMESTAMP>` by default (override with `--backup-dir`).
+The updater preserves the canonical unit/env layout already installed on the host and refreshes `/opt/qsl-server/DEPLOYMENT_INFO`.
 
 Fallback (build-from-source on host):
 
@@ -75,6 +77,7 @@ sudo bash scripts/update_ubuntu.sh ./target/release/qsl-server
 
 Verification:
 ```bash
+sudo bash scripts/verify_remote.sh
 sudo systemctl status qsl-server --no-pager
 sudo ss -lntp | rg ':8080|:443|:80'
 ```
