@@ -231,7 +231,7 @@ Evidence:
 
 ### NA-0008 — Route-Token API Shape Review + Migration Decision
 
-Status: READY
+Status: DONE
 Scope: docs/design only (`README.md`, `docs/**`, `DECISIONS.md`, `TRACEABILITY.md`; no `src/**`, no `Cargo.*`, no workflows, no runtime/API/auth changes)
 
 Problem:
@@ -252,3 +252,15 @@ Acceptance:
 - Decision is recorded with rationale and grounded leakage surfaces.
 - Operator/docs impacts are explicit and secret-safe.
 - Queue returns to READY=0 after close-out.
+
+Evidence:
+- PR: #33 https://github.com/QuantumShieldLabs/qsl-server/pull/33
+- Merge SHA: `893144a5a5e9`
+- mergedAt: `2026-03-14T12:16:35Z`
+- Decision: MIGRATE
+- Outcomes:
+  - qsl-server now records the route-token threat model in `docs/server/DOC-SRV-005_Route_Token_API_Shape_Review_v1.0.0_DRAFT.md` and in Decision D-0008.
+  - README and `DOC-SRV-003` now explicitly treat `/v1/push/:channel` and `/v1/pull/:channel` as the current compatibility shape only, not the desired end state.
+  - The direct follow-on requirements are defined docs-first: compatibility window or equivalent safe transition, log-safety requirements, operator/runbook changes, and deterministic validation expectations.
+- Evidence hygiene:
+  - Docs/design scope only; no `src/**`, `Cargo.toml`, `Cargo.lock`, `.github/workflows/**`, runtime/API/auth behavior, or relay semantics changed, and no raw route tokens were committed.
