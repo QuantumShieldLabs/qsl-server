@@ -10,3 +10,4 @@
 - NA-0006 DONE — PR #27 (https://github.com/QuantumShieldLabs/qsl-server/pull/27) merged (merge SHA 94da6e22eac78ec6ba31f2f56c0fde837e2bda65).
 - NA-0007 DONE — PR #30 (https://github.com/QuantumShieldLabs/qsl-server/pull/30) merged (merge SHA e61239ff84b23af94d01fab52e169c1e7ea6b304); `main` now requires only `rust` for ordinary pull requests.
 - NA-0007 implementation — `.github/workflows/ci.yml`; `.github/workflows/release-linux.yml`; `DECISIONS.md` — PR #30 (https://github.com/QuantumShieldLabs/qsl-server/pull/30), Decision D-0007.
+- NA-0008 READY — route-token API shape review + migration decision (docs/design only) — see `NEXT_ACTIONS.md`.

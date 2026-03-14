@@ -228,3 +228,27 @@ Evidence:
   - No `src/**`, `Cargo.toml`, `Cargo.lock`, auth, API, or relay semantic changes occurred in this item.
 - Evidence hygiene:
   - Workflow/policy/settings scope only; no secrets, tokens, bearer values, or capability-bearing URLs were committed.
+
+### NA-0008 — Route-Token API Shape Review + Migration Decision
+
+Status: READY
+Scope: docs/design only (`README.md`, `docs/**`, `DECISIONS.md`, `TRACEABILITY.md`; no `src/**`, no `Cargo.*`, no workflows, no runtime/API/auth changes)
+
+Problem:
+- qsl-server still documents relay route tokens in `/v1/push/{channel}` and `/v1/pull/{channel}` URL paths, making capability-like identifiers operator-visible in request URIs and pushing log-safety onto deployment/operator compensating controls.
+
+Invariants:
+1) Docs/design only; no `src/**`, `Cargo.toml`, `Cargo.lock`, or `.github/workflows/**` changes.
+2) No runtime, API-shape, auth, or relay-semantic changes in this item.
+3) No token disclosure in docs, examples, evidence, or operator guidance.
+4) No silent compatibility break; if migration is chosen, follow-on requirements must define compatibility and rollout.
+
+Deliverables:
+- Threat-model the current route-token-in-URL shape with grounded leakage surfaces.
+- Decide KEEP vs MIGRATE and record the rationale in qsl-server docs/design artifacts.
+- If MIGRATE is chosen, define the direct implementation follow-on requirements without implementing them here.
+
+Acceptance:
+- Decision is recorded with rationale and grounded leakage surfaces.
+- Operator/docs impacts are explicit and secret-safe.
+- Queue returns to READY=0 after close-out.
