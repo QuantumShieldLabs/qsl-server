@@ -197,7 +197,7 @@ Evidence:
 
 ### NA-0007 — Actions Runtime Maintenance + Protection Baseline
 
-Status: READY
+Status: DONE
 Scope: workflow/policy/settings only (`.github/workflows/**`, minimal CI-only support, governance linkage)
 
 Problem:
@@ -217,3 +217,14 @@ Acceptance:
 - Maintained workflows no longer emit the current JS-action runtime deprecation warning.
 - `main` branch protection exists and requires only the meaningful ordinary-PR safety context(s).
 - Queue returns to READY=0 after close-out.
+
+Evidence:
+- PR: #30 https://github.com/QuantumShieldLabs/qsl-server/pull/30
+- Merge SHA: `e61239ff84b2`
+- mergedAt: `2026-03-14T03:42:29Z`
+- Outcomes:
+  - Maintained qsl-server workflows now use `actions/checkout@v5` and `actions/upload-artifact@v6` where applicable; `dtolnay/rust-toolchain@stable` remains unchanged because it is a composite action, not a deprecation-exposed JS action.
+  - `main` branch protection now exists with admin enforcement enabled and requires only the ordinary PR safety context `rust`; the tag-only `release-linux` workflow is not required on pull requests.
+  - No `src/**`, `Cargo.toml`, `Cargo.lock`, auth, API, or relay semantic changes occurred in this item.
+- Evidence hygiene:
+  - Workflow/policy/settings scope only; no secrets, tokens, bearer values, or capability-bearing URLs were committed.
