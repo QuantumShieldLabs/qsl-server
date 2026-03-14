@@ -7,10 +7,11 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 - Fail-closed with deterministic errors.
 - No secret/payload logging.
 
-## API (current compatibility shape)
-- POST   /v1/push/{channel}         -> { "id": "<msg_id>" }
-- GET    /v1/pull/{channel}         -> oldest message bytes (200) or 204 if empty
-- Compatibility note: `{channel}` currently carries the route token in the request URI. Decision D-0008 records a compatibility-preserving migration away from URL-embedded route tokens; do not place real route tokens in docs, screenshots, or copied command lines.
+## API (canonical + compatibility window)
+- Canonical push: `POST /v1/push` with `X-QSL-Route-Token: <token>` -> `{ "id": "<msg_id>" }`
+- Canonical pull: `GET /v1/pull?max=N` with `X-QSL-Route-Token: <token>` -> oldest message bytes (200) or 204 if empty
+- Compatibility-only legacy shape: `POST /v1/push/{channel}` and `GET /v1/pull/{channel}?max=N`
+- Compatibility note: `{channel}` on the legacy shape carries the route token in the request URI. Decision D-0009 makes the header-based shape canonical and keeps the path-based shape only for the compatibility window; do not place real route tokens in docs, screenshots, or copied command lines.
 
 ## Behavior and limits
 - `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`

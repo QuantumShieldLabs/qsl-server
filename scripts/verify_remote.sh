@@ -33,9 +33,9 @@ DEPLOY_INFO="${BASE_DIR}/DEPLOYMENT_INFO"
     echo "binary missing: $BIN_PATH"
   fi
   echo "--- push/pull sanity ---"
-  curl -sS -D- -o /dev/null "$BASE_URL/v1/pull/$CH" | sed -n '1,25p'
-  printf hello | curl -sS -D- -o /dev/null -X POST "$BASE_URL/v1/push/$CH" --data-binary @- | sed -n '1,25p'
-  curl -sS -D- -X GET "$BASE_URL/v1/pull/$CH" | sed -n '1,80p'
+  curl -sS -D- -o /dev/null -H "X-QSL-Route-Token: $CH" "$BASE_URL/v1/pull?max=1" | sed -n '1,25p'
+  printf hello | curl -sS -D- -o /dev/null -X POST -H "X-QSL-Route-Token: $CH" "$BASE_URL/v1/push" --data-binary @- | sed -n '1,25p'
+  curl -sS -D- -X GET -H "X-QSL-Route-Token: $CH" "$BASE_URL/v1/pull?max=1" | sed -n '1,80p'
 } | tee "$LOG"
 
 echo "WROTE $LOG"

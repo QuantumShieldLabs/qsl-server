@@ -57,19 +57,36 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
   - recv_start / recv_item / recv_commit / recv_none / recv_error
 - Client must not emit secrets in logs/markers.
 
-## Implementation (current)
-- Endpoint: `POST /v1/push/:channel`
+## Implementation (current canonical + compatibility window)
+- Canonical endpoint: `POST /v1/push`
+  - Required header: `x-qsl-route-token`
   - Optional header: `x-msg-id` (client-provided opaque id; server will generate if absent).
   - Body: raw ciphertext blob (opaque).
   - Rejects:
+    - missing/empty route-token header → 400 `ERR_MISSING_ROUTE_TOKEN`
     - oversize → 413 `ERR_TOO_LARGE`
     - queue full → 429 `ERR_QUEUE_FULL`
-- Endpoint: `GET /v1/pull/:channel?max=N`
+- Canonical endpoint: `GET /v1/pull?max=N`
+  - Required header: `x-qsl-route-token`
+  - Returns 204 if empty.
+  - Returns JSON `{ "items": [ { "id": "<opaque>", "data": [u8...] }, ... ] }`.
+- Compatibility endpoint: `POST /v1/push/:channel`
+  - Optional header: `x-msg-id` (client-provided opaque id; server will generate if absent).
+  - Body: raw ciphertext blob (opaque).
+  - Rejects:
+    - path/header mismatch → 400 `ERR_ROUTE_TOKEN_MISMATCH`
+    - oversize → 413 `ERR_TOO_LARGE`
+    - queue full → 429 `ERR_QUEUE_FULL`
+- Compatibility endpoint: `GET /v1/pull/:channel?max=N`
   - Returns 204 if empty.
   - Returns JSON `{ "items": [ { "id": "<opaque>", "data": [u8...] }, ... ] }`.
   - Delete-on-deliver: items are removed when returned.
-- Current compatibility shape note: `:channel` currently carries the route token in the request URI.
-- Migration decision note: D-0008 chooses a compatibility-preserving migration away from URL-embedded route tokens. This document describes the current shape only and does not authorize runtime changes by itself.
+- Compatibility rules:
+  - canonical `/v1/push` and `/v1/pull` require `x-qsl-route-token`
+  - legacy `:channel` routes remain accepted during the compatibility window
+  - if legacy path token and `x-qsl-route-token` are both present and equal, accept
+  - if legacy path token and `x-qsl-route-token` are both present and different, reject with 400 `ERR_ROUTE_TOKEN_MISMATCH` and do not mutate queue state
+- Removal criteria note: keep the legacy path shape only until supported clients/operators have migrated and an explicit removal item lands.
 - Retention/TTL: not implemented yet; bounded by queue depth only (follow-on).
 
 ## Deployment notes

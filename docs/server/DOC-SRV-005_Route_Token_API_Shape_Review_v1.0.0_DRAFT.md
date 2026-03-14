@@ -4,15 +4,21 @@ Status: Draft
 
 Purpose:
 - review the current route-token-in-URL relay API shape
-- record the threat model and migration decision without changing runtime behavior
+- record the threat model, migration decision, and compatibility-window mechanism
 
-## Current compatibility shape
+## Canonical shape after migration
+
+- `POST /v1/push`
+- `GET /v1/pull?max=N`
+- `X-QSL-Route-Token: <token>`
+
+## Compatibility-only legacy shape
 
 - `POST /v1/push/:channel`
 - `GET /v1/pull/:channel?max=N`
 - `:channel` currently carries the route token
 
-This is the current deployed compatibility shape only. This document does not authorize a runtime change by itself.
+The header-based shape is canonical. The path-based shape remains compatibility-only until explicit removal criteria are met.
 
 ## Grounded leakage surfaces
 
@@ -50,19 +56,24 @@ Rationale:
 - Those controls are fragile and easy to regress outside the application code path.
 - The docs already show that the current shape is sensitive enough to require special handling, so documenting more warnings is not a sufficient end state.
 
-## Direct implementation follow-on requirements
-
-The direct follow-on item must preserve compatibility while moving the route token out of the URL path.
+## Implemented compatibility-window rules
 
 Compatibility requirements:
 - No silent break for existing clients.
-- Provide a staged compatibility window where the current path shape and the replacement mechanism can coexist, or an equally safe compatibility strategy with explicit cutover criteria.
-- The follow-on must define how client and server negotiate or default during rollout.
+- Canonical routes are token-free in the URL and require `X-QSL-Route-Token`.
+- Legacy path-based routes remain accepted during the compatibility window.
+
+Server-side acceptance rules:
+- canonical `/v1/push` and `/v1/pull` with missing/empty `X-QSL-Route-Token` reject deterministically with no mutation
+- legacy path-only requests remain accepted during the compatibility window
+- legacy path + header requests are accepted only when the values match
+- legacy path + header mismatch rejects deterministically with no mutation
+- `Authorization: Bearer ...` remains reserved for relay auth and is unchanged by route-token migration
 
 Migration and rollout criteria:
-- Define the replacement token carriage mechanism explicitly.
-- Define server-side acceptance rules during the compatibility window.
-- Define deprecation and removal criteria for the URL-embedded shape.
+- qsc and operator verification flows move to the header-based shape by default
+- docs/runbooks treat the path-based shape as compatibility-only
+- remove the legacy shape only in a later explicit item with cutover criteria after client/operator migration is proven
 
 Log-safety requirements:
 - No raw route tokens in access logs, metrics labels, traces, support bundles, or screenshots.
@@ -76,8 +87,8 @@ Validation requirements:
 - Add deterministic compatibility tests for legacy and migrated shapes.
 - Prove that normal logging and operator workflows do not expose raw route tokens.
 
-## Non-goals for this item
+## Non-goals for the compatibility window
 
-- No qsl-server runtime/API/auth/relay-semantic changes
-- No qsl-protocol client implementation changes
-- No migration rollout implementation
+- No auth semantic change
+- No route-token overloading into `Authorization`
+- No unrelated API redesign

@@ -48,7 +48,7 @@ sudo systemctl status qsl-server --no-pager
 Use `packaging/caddy/Caddyfile.example` as baseline.
 
 - Route public traffic to `127.0.0.1:8080`.
-- Ensure `/v1/*` access logging is disabled/sanitized to avoid route-token leakage in URI paths.
+- Keep `/v1/*` access logging disabled/sanitized during the compatibility window. Canonical clients use `X-QSL-Route-Token`, but legacy path-based clients may still place route tokens in request URIs until explicit removal.
 
 Restart Caddy after config changes.
 
@@ -111,7 +111,7 @@ sudo ss -lntp | rg ':80|:443|:8080'
 sudo systemctl status qsl-server --no-pager
 
 # local unauthorized check (without Authorization header)
-curl -i "http://127.0.0.1:8080/v1/pull/audit?max=1"
+curl -i -H "X-QSL-Route-Token: audit" "http://127.0.0.1:8080/v1/pull?max=1"
 
 # confirm loopback bind unless explicitly opted in
 sudo ss -lntp | rg ':8080'
