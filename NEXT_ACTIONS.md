@@ -267,7 +267,7 @@ Evidence:
 
 ### NA-0009 — Route-Token Migration + Compatibility Rollout
 
-Status: READY
+Status: DONE
 Scope: qsl-server runtime/API/docs/tests only for route-token carriage migration; compatibility-preserving rollout; no `Cargo.*` unless strictly needed for tests; no workflows; no unrelated API/auth/runtime redesign
 
 Problem:
@@ -291,3 +291,18 @@ Acceptance:
 - Missing/empty canonical header and path/header mismatch cases reject deterministically with no mutation.
 - Relay bearer auth behavior is unchanged.
 - Queue returns to READY=0 after close-out.
+
+Evidence:
+- PR: #36 https://github.com/QuantumShieldLabs/qsl-server/pull/36
+- Merge SHA: `1bbf0207ec3e`
+- mergedAt: `2026-03-14T13:48:15Z`
+- Compatibility window:
+  - Canonical `POST /v1/push` and `GET /v1/pull?max=N` now require `X-QSL-Route-Token`.
+  - Legacy `POST /v1/push/:channel` and `GET /v1/pull/:channel?max=N` remain accepted during the rollout window.
+  - Legacy path/header requests are accepted only when the values match; mismatches reject deterministically with no mutation.
+- Outcomes:
+  - qsl-server runtime now supports token-free canonical endpoints with `X-QSL-Route-Token` while preserving the legacy path-token surface for compatibility.
+  - README, API/spec docs, runbook, proxy guidance, and verification/operator scripts now use the canonical header-based examples and mark the path-token endpoints as compatibility-only.
+  - Deterministic validation covers canonical push/pull success, legacy compatibility success, mismatch reject/no-mutation, missing/empty-header reject/no-mutation, unchanged bearer-auth behavior, and static log-safety/operator-example checks.
+- Evidence hygiene:
+  - No raw route-token values, bearer secrets, or capability-bearing URL examples were committed; supported operator examples now use header-based token carriage.
