@@ -11,3 +11,4 @@
 - NA-0007 DONE — PR #30 (https://github.com/QuantumShieldLabs/qsl-server/pull/30) merged (merge SHA e61239ff84b23af94d01fab52e169c1e7ea6b304); `main` now requires only `rust` for ordinary pull requests.
 - NA-0007 implementation — `.github/workflows/ci.yml`; `.github/workflows/release-linux.yml`; `DECISIONS.md` — PR #30 (https://github.com/QuantumShieldLabs/qsl-server/pull/30), Decision D-0007.
 - NA-0008 READY — route-token API shape review + migration decision (docs/design only) — see `NEXT_ACTIONS.md`.
+- NA-0008 implementation — `README.md`; `docs/server/DOC-SRV-003_Relay_Inbox_Contract_v1.0.0_DRAFT.md`; `docs/server/DOC-SRV-005_Route_Token_API_Shape_Review_v1.0.0_DRAFT.md`; `DECISIONS.md` — PR #33 (https://github.com/QuantumShieldLabs/qsl-server/pull/33), Decision D-0008.
