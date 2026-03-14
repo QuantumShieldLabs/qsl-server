@@ -38,3 +38,11 @@
   - **Decision:** Canonical qsl-server deployment/install/update path is packaging-based: `packaging/systemd/qsl-server.service`, `packaging/systemd/relay.env.example`, `/etc/qsl-server/relay.env`, `scripts/install_ubuntu.sh`, `scripts/update_ubuntu.sh`, `scripts/update_from_release.sh`, `scripts/aws_update_and_verify.sh`, and `scripts/verify_remote.sh` using deploy metadata instead of an on-host git checkout.
   - **Rationale:** The public README and Ubuntu runbook already point at the packaging unit/env path; keeping the legacy root unit and build-on-host installer as active alternatives creates deployment drift without adding runtime value.
   - **References:** NA-0006, README.md, packaging/runbook_ubuntu.md, packaging/systemd/qsl-server.service, scripts/install_ubuntu.sh, scripts/update_ubuntu.sh, scripts/update_from_release.sh, scripts/aws_update_and_verify.sh, scripts/verify_remote.sh, scripts/ci/test_canonical_packaging_alignment.sh
+
+- **ID:** D-0007
+  - **Status:** Accepted
+  - **Date:** 2026-03-13
+  - **Goals:** G4, G5
+  - **Decision:** qsl-server workflow maintenance will upgrade maintained GitHub-managed actions to safe maintained majors and establish a minimal `main` branch-protection baseline that requires only the ordinary PR safety context `rust`. Tag/release-only workflows are not required on ordinary pull requests.
+  - **Rationale:** qsl-server has only one meaningful PR-safety lane today (`ci.yml` / `rust`), while `release-linux.yml` is tag-only and should not be part of ordinary PR gating. A minimal truthful baseline reduces branch-protection drift without widening into runtime or release-process redesign.
+  - **References:** NA-0007; `.github/workflows/ci.yml`; `.github/workflows/release-linux.yml`; `TRACEABILITY.md`

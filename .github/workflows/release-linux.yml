@@ -12,7 +12,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Build release binary
         run: cargo build --release --locked
@@ -24,7 +24,7 @@ jobs:
           chmod 0755 dist/qsl-server-linux-x86_64
           (cd dist && sha256sum qsl-server-linux-x86_64 > qsl-server-linux-x86_64.sha256)
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: qsl-server-linux-x86_64
           path: |
