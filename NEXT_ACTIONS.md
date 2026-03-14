@@ -149,3 +149,37 @@ Acceptance:
 - Governance, implementation, and close-out PRs are scope-limited and green.
 - TRACEABILITY contains READY/implementation/DONE links and merge SHAs.
 - Queue returns to READY=0 after close-out.
+
+### NA-0006 — Deployment/Layout Cleanup + Canonical Packaging Alignment
+
+Status: READY
+Scope: packaging/systemd/docs/scripts only (no `src/**`, no relay semantics, no API/auth changes)
+
+Problem:
+- The repo already documents packaging-based install/update flow, but conflicting legacy service/layout artifacts still exist and make the canonical deploy path ambiguous.
+
+Invariants:
+1) No `src/**`, `Cargo.toml`, `Cargo.lock`, or `.github/workflows/**` changes.
+2) No relay runtime semantic, API shape, auth behavior, or protocol parsing changes.
+3) Canonical service/env/install/update path must be packaging-based:
+   - `packaging/systemd/qsl-server.service`
+   - `packaging/systemd/relay.env.example`
+   - deployed env file `/etc/qsl-server/relay.env`
+   - `scripts/install_ubuntu.sh`
+   - `scripts/update_ubuntu.sh`
+   - `scripts/update_from_release.sh`
+   - `scripts/aws_update_and_verify.sh`
+4) Duplicate or conflicting legacy artifacts must be removed or clearly marked deprecated and kept out of the canonical path.
+5) Verification must not assume `/opt/qsl-server/repo` exists on the deployed host.
+
+Deliverables:
+- Align README/runbook/install/update/verify scripts to one canonical packaging path.
+- Remove or deprecate conflicting legacy service/install artifacts.
+- Add deterministic alignment checks proving the canonical path and legacy-artifact handling.
+- Update TRACEABILITY/DECISIONS with the implementation evidence.
+
+Acceptance:
+- One canonical in-tree deployment/layout path is represented consistently in docs/scripts.
+- `verify_remote.sh` verifies a canonical deployed host without assuming `/opt/qsl-server/repo`.
+- Any retained legacy artifact is clearly marked deprecated and not referenced by canonical docs/scripts/tests.
+- Queue returns to READY=0 after close-out.
