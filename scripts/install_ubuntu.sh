@@ -16,6 +16,7 @@ ENV_DST="$ETC_DIR/relay.env"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$REPO_ROOT/scripts/lib/deploy_metadata.sh"
 SERVICE_SRC="$REPO_ROOT/packaging/systemd/qsl-server.service"
 ENV_SRC="$REPO_ROOT/packaging/systemd/relay.env.example"
 
@@ -43,6 +44,8 @@ else
   chown root:root "$ENV_DST"
   chmod 0600 "$ENV_DST"
 fi
+
+write_deploy_metadata "$BASE_DIR" "local_binary" "$BIN_SRC"
 
 systemctl daemon-reload
 systemctl enable qsl-server

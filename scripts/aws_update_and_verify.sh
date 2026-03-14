@@ -171,6 +171,7 @@ if [[ -z "$BACKUP_DIR" ]]; then
 fi
 
 BIN_PATH="${BASE_DIR}/bin/${BIN_NAME}"
+DEPLOY_INFO_PATH="${BASE_DIR}/DEPLOYMENT_INFO"
 TMP_DIR="$(mktemp -d)"
 CHECKSUM_RAW="${TMP_DIR}/${ARTIFACT_NAME}.sha256"
 CHECKSUM_NORMALIZED="${TMP_DIR}/${ARTIFACT_NAME}.normalized.sha256"
@@ -212,6 +213,10 @@ if [[ -f "$BIN_PATH" ]]; then
   cp "$BIN_PATH" "$BACKUP_DIR/qsl-server.bin" || fail "backup" "${ERR_BACKUP}_binary"
   sha256sum "$BACKUP_DIR/qsl-server.bin" > "$BACKUP_DIR/qsl-server.bin.sha256" || fail "backup" "${ERR_BACKUP}_binary_sha"
 fi
+
+if [[ -f "$DEPLOY_INFO_PATH" ]]; then
+  cp "$DEPLOY_INFO_PATH" "$BACKUP_DIR/DEPLOYMENT_INFO" || fail "backup" "${ERR_BACKUP}_deploy_info"
+fi
 mark_step "backup" "ok"
 
 # 3) Run checksum-verified update
@@ -241,6 +246,15 @@ if ! (cd "$TMP_DIR" && sha256sum -c "$CHECKSUM_NORMALIZED" >/dev/null); then
   fail "post_verify_checksum" "${ERR_VERIFY}_checksum_mismatch"
 fi
 mark_step "post_verify_checksum" "ok"
+
+if [[ -f "$DEPLOY_INFO_PATH" ]]; then
+  deploy_sha="$(awk -F= '$1=="DEPLOY_BINARY_SHA256"{print $2}' "$DEPLOY_INFO_PATH" | tail -n 1 | tr -d '[:space:]' || true)"
+  actual_sha="$(sha256sum "$BIN_PATH" | awk '{print $1}')"
+  [[ -n "$deploy_sha" && "$deploy_sha" == "$actual_sha" ]] || fail "post_verify_deploy_info" "${ERR_VERIFY}_deploy_info_sha"
+else
+  fail "post_verify_deploy_info" "${ERR_VERIFY}_deploy_info_missing"
+fi
+mark_step "post_verify_deploy_info" "ok"
 
 if [[ "$CI_MODE" -eq 0 ]]; then
   if [[ -f "$ENV_FILE" ]]; then

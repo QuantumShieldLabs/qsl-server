@@ -48,6 +48,11 @@ if ! grep -q "new-binary" "${BASE_DIR}/bin/qsl-server"; then
   echo "expected updated binary content"
   exit 1
 fi
+if [[ ! -f "${BASE_DIR}/DEPLOYMENT_INFO" ]]; then
+  echo "expected deployment metadata after successful update"
+  exit 1
+fi
+grep -q '^DEPLOY_SOURCE_KIND=custom_artifact$' "${BASE_DIR}/DEPLOYMENT_INFO"
 
 printf 'old-binary\n' > "${BASE_DIR}/bin/qsl-server"
 cp "${BASE_DIR}/bin/qsl-server" "${TMP_DIR}/old.copy.dist"
