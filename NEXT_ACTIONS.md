@@ -152,7 +152,7 @@ Acceptance:
 
 ### NA-0006 — Deployment/Layout Cleanup + Canonical Packaging Alignment
 
-Status: READY
+Status: DONE
 Scope: packaging/systemd/docs/scripts only (no `src/**`, no relay semantics, no API/auth changes)
 
 Problem:
@@ -183,3 +183,14 @@ Acceptance:
 - `verify_remote.sh` verifies a canonical deployed host without assuming `/opt/qsl-server/repo`.
 - Any retained legacy artifact is clearly marked deprecated and not referenced by canonical docs/scripts/tests.
 - Queue returns to READY=0 after close-out.
+
+Evidence:
+- PR: #27 https://github.com/QuantumShieldLabs/qsl-server/pull/27
+- Merge SHA: `94da6e22eac7`
+- mergedAt: `2026-03-14T02:16:44Z`
+- Outcomes:
+  - Canonical install/update path is packaging-based: `packaging/systemd/qsl-server.service`, `packaging/systemd/relay.env.example`, `/etc/qsl-server/relay.env`, `scripts/install_ubuntu.sh`, `scripts/update_ubuntu.sh`, `scripts/update_from_release.sh`, `scripts/aws_update_and_verify.sh`, and `scripts/verify_remote.sh`.
+  - Conflicting root `systemd/qsl-server.service` was removed, and `scripts/install_ubuntu_24_04_systemd.sh` now remains only as a deprecated wrapper to the canonical installer.
+  - `verify_remote.sh` now reads deploy metadata from `/opt/qsl-server/DEPLOYMENT_INFO` instead of assuming `/opt/qsl-server/repo`, and deterministic script checks prove the canonical alignment.
+- Evidence hygiene:
+  - No relay/API/auth/runtime semantics changed; no secrets, bearer values, or token-bearing env contents were committed.
