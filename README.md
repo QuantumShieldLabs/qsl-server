@@ -7,9 +7,10 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 - Fail-closed with deterministic errors.
 - No secret/payload logging.
 
-## API (v0)
+## API (current compatibility shape)
 - POST   /v1/push/{channel}         -> { "id": "<msg_id>" }
 - GET    /v1/pull/{channel}         -> oldest message bytes (200) or 204 if empty
+- Compatibility note: `{channel}` currently carries the route token in the request URI. Decision D-0008 records a compatibility-preserving migration away from URL-embedded route tokens; do not place real route tokens in docs, screenshots, or copied command lines.
 
 ## Behavior and limits
 - `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`

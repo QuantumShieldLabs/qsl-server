@@ -68,6 +68,8 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
   - Returns 204 if empty.
   - Returns JSON `{ "items": [ { "id": "<opaque>", "data": [u8...] }, ... ] }`.
   - Delete-on-deliver: items are removed when returned.
+- Current compatibility shape note: `:channel` currently carries the route token in the request URI.
+- Migration decision note: D-0008 chooses a compatibility-preserving migration away from URL-embedded route tokens. This document describes the current shape only and does not authorize runtime changes by itself.
 - Retention/TTL: not implemented yet; bounded by queue depth only (follow-on).
 
 ## Deployment notes
