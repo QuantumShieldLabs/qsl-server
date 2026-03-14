@@ -94,10 +94,14 @@ struct PullQuery {
     max: Option<usize>,
 }
 
+const ROUTE_TOKEN_HEADER: &str = "x-qsl-route-token";
+
 pub fn app(state: AppState) -> Router {
     Router::new()
-        .route("/v1/push/:channel", post(push_message))
-        .route("/v1/pull/:channel", get(pull_message))
+        .route("/v1/push", post(push_message_canonical))
+        .route("/v1/push/:channel", post(push_message_legacy))
+        .route("/v1/pull", get(pull_message_canonical))
+        .route("/v1/pull/:channel", get(pull_message_legacy))
         .with_state(state)
 }
 
@@ -126,15 +130,64 @@ fn auth_ok(headers: &HeaderMap, relay_token: Option<&str>) -> bool {
     }
 }
 
-async fn push_message(
+fn resolve_route_token(
+    headers: &HeaderMap,
+    path_token: Option<&str>,
+) -> Result<String, &'static str> {
+    let header_token = match headers.get(ROUTE_TOKEN_HEADER) {
+        None => None,
+        Some(raw) => {
+            let raw = raw.to_str().map_err(|_| "ERR_BAD_ROUTE_TOKEN")?;
+            let token = raw.trim();
+            if token.is_empty() {
+                return Err("ERR_MISSING_ROUTE_TOKEN");
+            }
+            Some(token.to_string())
+        }
+    };
+    let path_token = path_token
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string);
+    match (path_token, header_token) {
+        (None, None) => Err("ERR_MISSING_ROUTE_TOKEN"),
+        (None, Some(header)) => Ok(header),
+        (Some(path), None) => Ok(path),
+        (Some(path), Some(header)) if path == header => Ok(header),
+        (Some(_), Some(_)) => Err("ERR_ROUTE_TOKEN_MISMATCH"),
+    }
+}
+
+async fn push_message_canonical(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    push_message_inner(st, None, headers, body).await
+}
+
+async fn push_message_legacy(
     State(st): State<AppState>,
     Path(channel): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    push_message_inner(st, Some(channel.as_str()), headers, body).await
+}
+
+async fn push_message_inner(
+    st: AppState,
+    path_token: Option<&str>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     if !auth_ok(&headers, st.relay_token.as_deref()) {
         return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
     }
+    let channel = match resolve_route_token(&headers, path_token) {
+        Ok(v) => v,
+        Err(code) => return (StatusCode::BAD_REQUEST, code).into_response(),
+    };
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "ERR_EMPTY_BODY").into_response();
     }
@@ -173,15 +226,36 @@ async fn push_message(
     (StatusCode::OK, Json(PostResp { id: msg_id })).into_response()
 }
 
-async fn pull_message(
+async fn pull_message_canonical(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PullQuery>,
+) -> impl IntoResponse {
+    pull_message_inner(st, None, headers, query).await
+}
+
+async fn pull_message_legacy(
     State(st): State<AppState>,
     Path(channel): Path<String>,
     headers: HeaderMap,
     Query(query): Query<PullQuery>,
 ) -> impl IntoResponse {
+    pull_message_inner(st, Some(channel.as_str()), headers, query).await
+}
+
+async fn pull_message_inner(
+    st: AppState,
+    path_token: Option<&str>,
+    headers: HeaderMap,
+    query: PullQuery,
+) -> impl IntoResponse {
     if !auth_ok(&headers, st.relay_token.as_deref()) {
         return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
     }
+    let channel = match resolve_route_token(&headers, path_token) {
+        Ok(v) => v,
+        Err(code) => return (StatusCode::BAD_REQUEST, code).into_response(),
+    };
     let max = query.max.unwrap_or(1);
     if max == 0 {
         return (StatusCode::BAD_REQUEST, "ERR_BAD_MAX").into_response();
@@ -626,7 +700,8 @@ mod tests {
         let client = reqwest::Client::new();
 
         let push = client
-            .post(format!("{}/v1/push/auth", base))
+            .post(format!("{}/v1/push", base))
+            .header(ROUTE_TOKEN_HEADER, "auth")
             .body(b"x".to_vec())
             .send()
             .await
@@ -638,7 +713,8 @@ mod tests {
         );
 
         let pull = client
-            .get(format!("{}/v1/pull/auth?max=1", base))
+            .get(format!("{}/v1/pull?max=1", base))
+            .header(ROUTE_TOKEN_HEADER, "auth")
             .send()
             .await
             .unwrap_or_else(|e| panic!("{e}"));
@@ -649,7 +725,8 @@ mod tests {
         );
 
         let pull_ok = client
-            .get(format!("{}/v1/pull/auth?max=1", base))
+            .get(format!("{}/v1/pull?max=1", base))
+            .header(ROUTE_TOKEN_HEADER, "auth")
             .header("Authorization", "Bearer topsecret")
             .send()
             .await
@@ -670,7 +747,8 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
         let push = client
-            .post(format!("{}/v1/push/auth", base))
+            .post(format!("{}/v1/push", base))
+            .header(ROUTE_TOKEN_HEADER, "auth")
             .header("Authorization", "Bearer wrong")
             .body(b"x".to_vec())
             .send()
@@ -683,7 +761,8 @@ mod tests {
         );
 
         let pull_ok = client
-            .get(format!("{}/v1/pull/auth?max=1", base))
+            .get(format!("{}/v1/pull?max=1", base))
+            .header(ROUTE_TOKEN_HEADER, "auth")
             .header("Authorization", "Bearer topsecret")
             .send()
             .await
@@ -706,7 +785,8 @@ mod tests {
         let payload = b"auth-enabled".to_vec();
 
         let push = client
-            .post(format!("{}/v1/push/authok", base))
+            .post(format!("{}/v1/push", base))
+            .header(ROUTE_TOKEN_HEADER, "authok")
             .header("Authorization", "Bearer topsecret")
             .body(payload.clone())
             .send()
@@ -715,7 +795,8 @@ mod tests {
         assert_eq!(push.status(), ReqStatus::OK);
 
         let pull = client
-            .get(format!("{}/v1/pull/authok?max=1", base))
+            .get(format!("{}/v1/pull?max=1", base))
+            .header(ROUTE_TOKEN_HEADER, "authok")
             .header("Authorization", "Bearer topsecret")
             .send()
             .await

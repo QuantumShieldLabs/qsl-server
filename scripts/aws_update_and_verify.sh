@@ -278,7 +278,7 @@ if [[ "$CI_MODE" -eq 0 ]]; then
   fi
   mark_step "post_verify_loopback_bind" "ok"
 
-  local_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${port}/v1/pull/qsc-selftest?max=1" || true)"
+  local_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 -H 'X-QSL-Route-Token: qsc-selftest' "http://127.0.0.1:${port}/v1/pull?max=1" || true)"
   echo "QSL_AWS_UPDATE_STEP=post_verify_local_http status_code=${local_status:-000}"
   [[ "${local_status:-000}" == "401" ]] || fail "post_verify_local_http" "${ERR_VERIFY}_local_http_status"
   mark_step "post_verify_local_http" "ok"
@@ -297,7 +297,7 @@ if [[ "$CI_MODE" -eq 0 ]]; then
   fi
 
   if [[ -n "$caddy_host" ]]; then
-    https_status="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 8 "https://${caddy_host}/v1/pull/qsc-selftest?max=1" || true)"
+    https_status="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 8 -H 'X-QSL-Route-Token: qsc-selftest' "https://${caddy_host}/v1/pull?max=1" || true)"
     echo "QSL_AWS_UPDATE_STEP=post_verify_https status_code=${https_status:-000}"
     [[ "${https_status:-000}" == "401" ]] || fail "post_verify_https" "${ERR_VERIFY}_https_status"
     mark_step "post_verify_https" "ok"
@@ -314,7 +314,7 @@ if [[ "$CI_MODE" -eq 0 ]]; then
 
   if [[ -f "$CADDY_LOG" ]]; then
     before_count="$(rg -c '/v1/' "$CADDY_LOG" || true)"
-    curl -sk -o /dev/null --max-time 8 "https://${caddy_host}/v1/pull/qsc-selftest?max=1" || true
+    curl -sk -o /dev/null --max-time 8 -H 'X-QSL-Route-Token: qsc-selftest' "https://${caddy_host}/v1/pull?max=1" || true
     after_count="$(rg -c '/v1/' "$CADDY_LOG" || true)"
     echo "QSL_AWS_UPDATE_STEP=post_verify_caddy_log_delta before=${before_count:-0} after=${after_count:-0}"
     [[ "${before_count:-0}" == "${after_count:-0}" ]] || fail "post_verify_caddy_hygiene" "${ERR_VERIFY}_v1_log_delta"

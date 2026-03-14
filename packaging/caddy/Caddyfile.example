@@ -4,8 +4,9 @@
 relay.example.com {
     encode gzip
 
-    # /v1 paths include capability-like route tokens in the URI. Do not log
-    # these request URIs in access logs.
+    # Keep /v1 request logging disabled/sanitized during the compatibility
+    # window. Canonical clients use X-QSL-Route-Token, but legacy path-based
+    # clients may still place route tokens in the request URI until removal.
     @relay_api path /v1/*
     log_skip @relay_api
 

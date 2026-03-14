@@ -54,3 +54,11 @@
   - **Decision:** The current qsl-server route-token-in-URL API shape is retained only as the current compatibility surface and should migrate away from URL-embedded route tokens. This directive records the threat model and migration requirements but does not change runtime behavior.
   - **Rationale:** Route tokens are capability-like identifiers that currently propagate in request URIs across operator-visible surfaces such as reverse-proxy logs, shell command lines, screenshots, and observability traces. The existing deployment guidance already needs `/v1/*` log suppression, which is evidence that KEEP would leave too much safety burden on compensating controls.
   - **References:** NA-0008; `README.md`; `docs/server/DOC-SRV-003_Relay_Inbox_Contract_v1.0.0_DRAFT.md`; `docs/server/DOC-SRV-005_Route_Token_API_Shape_Review_v1.0.0_DRAFT.md`; `TRACEABILITY.md`
+
+- **ID:** D-0009
+  - **Status:** Accepted
+  - **Date:** 2026-03-14
+  - **Goals:** G4, G5
+  - **Decision:** qsl-server now makes `X-QSL-Route-Token` on token-free `POST /v1/push` and `GET /v1/pull?max=N` the canonical route-token carriage mechanism while preserving legacy `/v1/push/:channel` and `/v1/pull/:channel?max=N` during a compatibility window. Legacy path/header requests are accepted only when the values match; mismatches reject deterministically with no queue mutation.
+  - **Rationale:** Header carriage removes route tokens from the most widely propagated request surface without overloading `Authorization` or redesigning `GET` request bodies. Keeping the legacy path during the compatibility window avoids a silent break for existing clients/operators while allowing supported flows to move immediately to a safer canonical shape.
+  - **References:** NA-0009; `src/lib.rs`; `README.md`; `docs/server/DOC-SRV-003_Relay_Inbox_Contract_v1.0.0_DRAFT.md`; `docs/server/DOC-SRV-005_Route_Token_API_Shape_Review_v1.0.0_DRAFT.md`; `packaging/runbook_ubuntu.md`; `scripts/verify_remote.sh`; `scripts/aws_update_and_verify.sh`; `tests/relay_smoke.rs`; `scripts/ci/test_route_token_migration.sh`; `TRACEABILITY.md`
