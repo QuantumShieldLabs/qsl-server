@@ -1,11 +1,9 @@
 # TRACEABILITY (qsl-server)
 - NA-0001 DONE — PR #4 (https://github.com/QuantumShieldLabs/qsl-server/pull/4) merged (merge SHA 5f1ebe9c156f2faa3acc1bce7d66b5b0679bbe01).
 - NA-0002 DONE — Impl PR #7 (https://github.com/QuantumShieldLabs/qsl-server/pull/7) merged (merge SHA 13c7266817f158ce9ca5a786eb540e7d4453083c).
-- NA-0003 READY — docs/server/DOC-SRV-003_Relay_Inbox_Contract_v1.0.0_DRAFT.md; tests/NA-0003_relay_inbox_contract_plan.md — PR #9 (https://github.com/QuantumShieldLabs/qsl-server/pull/9); Impl PR #10 (https://github.com/QuantumShieldLabs/qsl-server/pull/10).
 - NA-0003 DONE — Impl PR #10 (https://github.com/QuantumShieldLabs/qsl-server/pull/10) merged (merge SHA 0649094990bcd81db61d37c2f91d73653a12d907).
-- NA-0004 READY — docs/server/DOC-SRV-004_Relay_Auth_And_Hardening_Contract_v1.0.0_DRAFT.md; tests/NA-0004_relay_auth_hardening_plan.md — PR #12 (https://github.com/QuantumShieldLabs/qsl-server/pull/12).
 - NA-0004 implementation — PR #13 (https://github.com/QuantumShieldLabs/qsl-server/pull/13).
 - NA-0004 DONE — Impl PR #13 (https://github.com/QuantumShieldLabs/qsl-server/pull/13) merged (merge SHA 1fa1978f2f30057f34a139d2f01e1e1c61746d96).
-- NA-0005 READY — tests/NA-0005_provenance_lighttouch_plan.md — PR #15 (https://github.com/QuantumShieldLabs/qsl-server/pull/15).
 - NA-0005 implementation — NOTICE; PROVENANCE.md; SIGNED_RELEASES_RUNBOOK.md; tests/NA-0005_provenance_lighttouch_plan.md — PR #16 (https://github.com/QuantumShieldLabs/qsl-server/pull/16).
 - NA-0005 DONE — PR #16 (https://github.com/QuantumShieldLabs/qsl-server/pull/16) merged (merge SHA cfc8e600988dbba40f30a39eda7021efaf8c83d5).
+- NA-0006 READY — canonical packaging/unit/env alignment across `README.md`, `packaging/runbook_ubuntu.md`, `packaging/systemd/qsl-server.service`, `packaging/systemd/relay.env.example`, `scripts/install_ubuntu.sh`, `scripts/update_ubuntu.sh`, `scripts/update_from_release.sh`, `scripts/aws_update_and_verify.sh`, `scripts/verify_remote.sh`, and deterministic alignment checks — see `NEXT_ACTIONS.md`.
