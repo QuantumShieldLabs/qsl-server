@@ -194,3 +194,26 @@ Evidence:
   - `verify_remote.sh` now reads deploy metadata from `/opt/qsl-server/DEPLOYMENT_INFO` instead of assuming `/opt/qsl-server/repo`, and deterministic script checks prove the canonical alignment.
 - Evidence hygiene:
   - No relay/API/auth/runtime semantics changed; no secrets, bearer values, or token-bearing env contents were committed.
+
+### NA-0007 — Actions Runtime Maintenance + Protection Baseline
+
+Status: READY
+Scope: workflow/policy/settings only (`.github/workflows/**`, minimal CI-only support, governance linkage)
+
+Problem:
+- qsl-server's maintained public workflows still depend on deprecation-exposed GitHub Action majors, and `main` still lacks a truthful branch-protection baseline for the repo's actual PR safety surface.
+
+Invariants:
+1) No `src/**`, `Cargo.toml`, `Cargo.lock`, runtime semantics, auth posture, or API-shape changes.
+2) Maintain only the meaningful PR safety context(s) on `main`; do not require tag/release-only workflows on ordinary PRs.
+3) Required checks must always resolve without deadlocking on skipped workflows.
+
+Deliverables:
+- Update maintained qsl-server workflows to safe maintained action majors where available.
+- Establish a minimal truthful branch-protection baseline on `main`.
+- Record the protection/runtime-maintenance decision in `DECISIONS.md` / `TRACEABILITY.md`.
+
+Acceptance:
+- Maintained workflows no longer emit the current JS-action runtime deprecation warning.
+- `main` branch protection exists and requires only the meaningful ordinary-PR safety context(s).
+- Queue returns to READY=0 after close-out.
