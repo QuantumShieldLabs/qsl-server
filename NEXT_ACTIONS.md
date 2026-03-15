@@ -309,7 +309,7 @@ Evidence:
 
 ### NA-0010 — Public/License Posture Alignment
 
-Status: READY
+Status: DONE
 Scope: docs/legal/governance only (`README.md`, `NOTICE`, `LICENSE`, repo metadata alignment as needed); no `src/**`; no `Cargo.toml`/`Cargo.lock`; no workflows; no relay/API/auth/runtime changes
 
 Problem:
@@ -332,3 +332,14 @@ Acceptance:
 - README/resources/legal posture does not contradict the actual public repo state.
 - No `src/**`, `Cargo.*`, or workflow files change.
 - Queue returns to READY=0 after closeout.
+
+Evidence:
+- Implementation PR: #39 https://github.com/QuantumShieldLabs/qsl-server/pull/39
+- Merge SHA: `3ed59379bdbc`
+- mergedAt: `2026-03-15T14:50:15Z`
+- Outcomes:
+  - qsl-server now ships an explicit in-tree `LICENSE`, so the root `NOTICE` reference resolves truthfully.
+  - `README.md` now states that qsl-server is a public AGPL transport-only relay repository and distinguishes that public source posture from any separate commercial services/support offerings.
+  - Repo description/about text remained truthful and did not require a metadata change.
+- Evidence hygiene:
+  - Docs/legal/governance scope only; no `src/**`, `Cargo.toml`, `Cargo.lock`, workflows, relay/API/auth/runtime behavior, or secret-bearing artifacts changed.
