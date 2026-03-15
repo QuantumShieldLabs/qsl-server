@@ -306,3 +306,29 @@ Evidence:
   - Deterministic validation covers canonical push/pull success, legacy compatibility success, mismatch reject/no-mutation, missing/empty-header reject/no-mutation, unchanged bearer-auth behavior, and static log-safety/operator-example checks.
 - Evidence hygiene:
   - No raw route-token values, bearer secrets, or capability-bearing URL examples were committed; supported operator examples now use header-based token carriage.
+
+### NA-0010 — Public/License Posture Alignment
+
+Status: READY
+Scope: docs/legal/governance only (`README.md`, `NOTICE`, `LICENSE`, repo metadata alignment as needed); no `src/**`; no `Cargo.toml`/`Cargo.lock`; no workflows; no relay/API/auth/runtime changes
+
+Problem:
+- qsl-server public posture is drifting because `NOTICE` says "see LICENSE" while the live repo has no root `LICENSE`, and the repo's public legal/resource story is not fully aligned to the actual public AGPL source posture.
+
+Invariants:
+1) Docs/legal/governance only; no relay semantics, API shape, auth posture, or runtime behavior changes.
+2) If `NOTICE` references `LICENSE`, the repo must ship an explicit in-tree `LICENSE`.
+3) Public repo description/about text must not contradict the merged file posture.
+4) Security/contributing guidance may stay inherited from org/community health if that remains truthful.
+
+Deliverables:
+- Add and align a root `LICENSE` if required by the merged notice/legal posture.
+- Correct any README/legal/resource text that materially contradicts the repo's actual public AGPL source posture.
+- Update repo description/about metadata only if it materially contradicts the merged file posture.
+- Record implementation and closeout evidence truthfully.
+
+Acceptance:
+- `NOTICE`/`LICENSE` references resolve truthfully in-tree.
+- README/resources/legal posture does not contradict the actual public repo state.
+- No `src/**`, `Cargo.*`, or workflow files change.
+- Queue returns to READY=0 after closeout.
