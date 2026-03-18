@@ -343,3 +343,36 @@ Evidence:
   - Repo description/about text remained truthful and did not require a metadata change.
 - Evidence hygiene:
   - Docs/legal/governance scope only; no `src/**`, `Cargo.toml`, `Cargo.lock`, workflows, relay/API/auth/runtime behavior, or secret-bearing artifacts changed.
+
+### NA-0011 — Deployed Relay Canonical Compatibility Restore + Verification Guard
+
+Status: READY
+
+Problem:
+- The current qsl-server main source already implements the canonical header-based relay API, but the live deployed relay at `https://qsl.ddnsfree.com` is stale and still serves only the legacy path-token pull shape, so the real relay must be restored and the project must fail fast before future operational validation starts against a legacy-only deployment.
+
+Scope:
+- deployment/ops/scripts/docs only
+- restore the live deployed relay to current canonical header-based compatibility
+- hard-code a compatibility preflight/guard in project scripts/docs
+- no `src/**` changes
+- no `Cargo.toml` / `Cargo.lock`
+- no workflow changes
+
+Must protect:
+- qsl-server remains transport-only
+- no relay semantic redesign
+- no raw route tokens or bearer secrets in docs, logs, scripts, or evidence
+- if legacy compatibility still exists on current main, preserve it truthfully
+
+Deliverables:
+1) restore the live deployed relay at `qsl.ddnsfree.com` to the current canonical header-based API already implemented on qsl-server main
+2) hard-code a fail-fast relay compatibility preflight/guard in project scripts/docs so future stale deployments are detected before operational validation begins
+3) capture secret-safe before/after probe evidence and operator-safe restore steps
+4) return qsl-server READY count to `0` after closeout
+
+Acceptance:
+1) canonical loopback and public relay probes succeed truthfully after restore
+2) project scripts/docs fail fast on legacy-only deployed relays
+3) qsl-server remains transport-only and no source/runtime semantic redesign occurs
+4) queue/evidence updated truthfully
