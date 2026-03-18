@@ -77,8 +77,13 @@ The verify script checks:
 - listener on port 8080
 - deployed binary metadata from `/opt/qsl-server/DEPLOYMENT_INFO`
 - installed binary checksum
+- canonical relay compatibility on loopback and, when derivable, the public TLS host
 - push/pull sanity
 - deployed git HEAD
+
+Fail-fast rule:
+- Run `scripts/verify_remote.sh` before any real-world validation or qsc relay test.
+- A deployment that answers the legacy path-token pull shape while failing canonical `/v1/pull?max=1` is deployment drift, not a weak-host saturation result and not a qsl-attachments defect.
 
 ## Scope boundary
 - Payloads are opaque bytes; the relay does not parse or interpret protocol messages.

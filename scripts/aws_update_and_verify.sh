@@ -9,6 +9,7 @@ ERR_VERIFY="QSL_AWS_UPDATE_ERR_VERIFY"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UPDATE_SCRIPT="${SCRIPT_DIR}/update_from_release.sh"
+COMPAT_SCRIPT="${SCRIPT_DIR}/check_relay_compatibility.sh"
 
 BASE_DIR="/opt/qsl-server"
 BACKUP_DIR=""
@@ -189,6 +190,7 @@ need_cmd sha256sum
 need_cmd ss
 [[ "$NO_SYSTEMCTL" -eq 1 ]] || need_cmd systemctl
 [[ -x "$UPDATE_SCRIPT" ]] || fail "preflight" "${ERR_PREFLIGHT}_update_script_missing"
+[[ -x "$COMPAT_SCRIPT" ]] || fail "preflight" "${ERR_PREFLIGHT}_compat_script_missing"
 mark_step "preflight" "ok"
 
 # 2) Backup
@@ -282,6 +284,10 @@ if [[ "$CI_MODE" -eq 0 ]]; then
   echo "QSL_AWS_UPDATE_STEP=post_verify_local_http status_code=${local_status:-000}"
   [[ "${local_status:-000}" == "401" ]] || fail "post_verify_local_http" "${ERR_VERIFY}_local_http_status"
   mark_step "post_verify_local_http" "ok"
+  if ! BASE_URL="http://127.0.0.1:${port}" ENV_FILE="$ENV_FILE" CHANNEL="qsc-selftest" "$COMPAT_SCRIPT"; then
+    fail "post_verify_relay_compat_loopback" "${ERR_VERIFY}_legacy_only_deploy"
+  fi
+  mark_step "post_verify_relay_compat_loopback" "ok"
 
   caddy_host=""
   if [[ -f "$CADDY_FILE" ]]; then
@@ -301,8 +307,13 @@ if [[ "$CI_MODE" -eq 0 ]]; then
     echo "QSL_AWS_UPDATE_STEP=post_verify_https status_code=${https_status:-000}"
     [[ "${https_status:-000}" == "401" ]] || fail "post_verify_https" "${ERR_VERIFY}_https_status"
     mark_step "post_verify_https" "ok"
+    if ! BASE_URL="https://${caddy_host}" ENV_FILE="$ENV_FILE" CHANNEL="qsc-selftest" "$COMPAT_SCRIPT"; then
+      fail "post_verify_relay_compat_https" "${ERR_VERIFY}_legacy_only_deploy"
+    fi
+    mark_step "post_verify_relay_compat_https" "ok"
   else
     echo "QSL_AWS_UPDATE_STEP=post_verify_https status=skip code=no_caddy_host"
+    echo "QSL_AWS_UPDATE_STEP=post_verify_relay_compat_https status=skip code=no_caddy_host"
   fi
 
   if [[ -f "$CADDY_FILE" ]]; then
@@ -326,7 +337,9 @@ else
   echo "QSL_AWS_UPDATE_STEP=post_verify_env_perms status=skip code=ci_mode"
   echo "QSL_AWS_UPDATE_STEP=post_verify_loopback_bind status=skip code=ci_mode"
   echo "QSL_AWS_UPDATE_STEP=post_verify_local_http status=skip code=ci_mode"
+  echo "QSL_AWS_UPDATE_STEP=post_verify_relay_compat_loopback status=skip code=ci_mode"
   echo "QSL_AWS_UPDATE_STEP=post_verify_https status=skip code=ci_mode"
+  echo "QSL_AWS_UPDATE_STEP=post_verify_relay_compat_https status=skip code=ci_mode"
   echo "QSL_AWS_UPDATE_STEP=post_verify_caddy_hygiene status=skip code=ci_mode"
 fi
 
