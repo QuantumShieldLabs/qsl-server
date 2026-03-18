@@ -346,7 +346,7 @@ Evidence:
 
 ### NA-0011 — Deployed Relay Canonical Compatibility Restore + Verification Guard
 
-Status: READY
+Status: DONE
 
 Problem:
 - The current qsl-server main source already implements the canonical header-based relay API, but the live deployed relay at `https://qsl.ddnsfree.com` is stale and still serves only the legacy path-token pull shape, so the real relay must be restored and the project must fail fast before future operational validation starts against a legacy-only deployment.
@@ -376,3 +376,23 @@ Acceptance:
 2) project scripts/docs fail fast on legacy-only deployed relays
 3) qsl-server remains transport-only and no source/runtime semantic redesign occurs
 4) queue/evidence updated truthfully
+
+Evidence:
+- Implementation PR: #42 https://github.com/QuantumShieldLabs/qsl-server/pull/42
+- Merge SHA: `d66ea363bf6a45f550114c52b98b3f750b166c6c`
+- mergedAt: `2026-03-18T02:26:41Z`
+- Deployed relay restore summary:
+  - current qsl-server `main` already supported canonical header-based route-token carriage, so no `src/**` or semantic changes were required
+  - the live relay at `https://qsl.ddnsfree.com` was restored by deploying the current canonical qsl-server build on `qsl` through the existing update path
+  - the restored relay now serves canonical `/v1/push` and `/v1/pull?max=N` truthfully while preserving legacy compatibility during the migration window
+- Canonical probe matrix summary:
+  - before restore: canonical loopback/public `404`, legacy loopback/public `204`
+  - after restore: canonical loopback/public `204`, legacy loopback/public `204`
+  - live headless `qsc` relay-test against `https://qsl.ddnsfree.com` returned `relay_authenticated`
+- Hard-coded verification guard summary:
+  - `scripts/check_relay_compatibility.sh` now probes canonical and legacy pull shapes and fails with `legacy_only_deploy` when a stale deployment answers only the legacy path
+  - `scripts/verify_remote.sh` and `scripts/aws_update_and_verify.sh` now run the compatibility preflight before operator validation can proceed
+  - `scripts/ci/test_relay_deploy_compatibility_guard.sh` now proves the exact stale-deploy failure code against a mocked legacy-only endpoint
+- Evidence hygiene:
+  - docs/scripts/tests scope only; no `src/**`, `Cargo.toml`, `Cargo.lock`, workflow, qsl-protocol, or qsl-attachments files changed
+  - no raw bearer tokens, route tokens, or capability-like secrets were printed or committed
