@@ -399,7 +399,7 @@ Evidence:
 
 ### NA-0012 — Route-Token URI Compatibility Retirement + Secret-Ingress Remediation
 
-Status: READY
+Status: DONE
 
 Problem:
 - The next load-bearing blocker in qsl-server is retiring legacy URI-carried route-token compatibility paths and aligning relay secret-ingress handling with the frozen metadata / secret-hygiene contract.
@@ -425,3 +425,13 @@ Acceptance:
 1) URI-carried route-token compatibility paths are retired truthfully
 2) no relay semantic redesign occurs
 3) queue/evidence updated truthfully
+
+Closeout evidence:
+- implementation PR: #45 https://github.com/QuantumShieldLabs/qsl-server/pull/45
+- merge SHA: `550bd3b0ea99`
+- mergedAt: `2026-03-30T03:24:40Z`
+- exact finalization outcome:
+  - legacy `/v1/push/:channel` and `/v1/pull/:channel?max=N` ingress is retired outright; only token-free `/v1/push` and `/v1/pull?max=N` plus `X-QSL-Route-Token` remain supported
+  - relay auth remains unchanged and transport-only; no route-token, bearer, or protocol redesign was introduced
+  - runtime tests, deploy compatibility guards, and operator docs now fail closed when a stale legacy-path-token surface is still present
+  - qsl-server returns truthfully to `READY=0`; no direct repo-local successor remains on this lane
