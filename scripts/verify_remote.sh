@@ -55,7 +55,7 @@ fi
   else
     echo "binary missing: $BIN_PATH"
   fi
-  echo "--- canonical compatibility preflight ---"
+  echo "--- route-token retirement preflight ---"
   BASE_URL="$BASE_URL" ENV_FILE="$ENV_FILE" CHANNEL="$CH" "$SCRIPT_DIR/check_relay_compatibility.sh"
   if [[ -n "$PUBLIC_BASE_URL" ]]; then
     BASE_URL="$PUBLIC_BASE_URL" ENV_FILE="$ENV_FILE" CHANNEL="$CH" "$SCRIPT_DIR/check_relay_compatibility.sh"

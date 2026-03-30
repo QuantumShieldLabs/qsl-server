@@ -62,3 +62,11 @@
   - **Decision:** qsl-server now makes `X-QSL-Route-Token` on token-free `POST /v1/push` and `GET /v1/pull?max=N` the canonical route-token carriage mechanism while preserving legacy `/v1/push/:channel` and `/v1/pull/:channel?max=N` during a compatibility window. Legacy path/header requests are accepted only when the values match; mismatches reject deterministically with no queue mutation.
   - **Rationale:** Header carriage removes route tokens from the most widely propagated request surface without overloading `Authorization` or redesigning `GET` request bodies. Keeping the legacy path during the compatibility window avoids a silent break for existing clients/operators while allowing supported flows to move immediately to a safer canonical shape.
   - **References:** NA-0009; `src/lib.rs`; `README.md`; `docs/server/DOC-SRV-003_Relay_Inbox_Contract_v1.0.0_DRAFT.md`; `docs/server/DOC-SRV-005_Route_Token_API_Shape_Review_v1.0.0_DRAFT.md`; `packaging/runbook_ubuntu.md`; `scripts/verify_remote.sh`; `scripts/aws_update_and_verify.sh`; `tests/relay_smoke.rs`; `scripts/ci/test_route_token_migration.sh`; `TRACEABILITY.md`
+
+- **ID:** D-0010
+  - **Status:** Accepted
+  - **Date:** 2026-03-30
+  - **Goals:** G4, G5
+  - **Decision:** qsl-server now retires legacy `/v1/push/:channel` and `/v1/pull/:channel?max=N` outright. Canonical header-carried routing on token-free `/v1/push` and `/v1/pull?max=N` is the only supported route-token ingress shape.
+  - **Rationale:** The compatibility window from D-0009 existed only to get supported clients and operator guidance onto the safer header-based posture. That migration is now complete enough that continuing to accept URI-carried route tokens leaves a known passive-leak surface live without adding truthful transport value.
+  - **References:** NA-0012; `src/lib.rs`; `tests/relay_smoke.rs`; `README.md`; `docs/server/DOC-SRV-003_Relay_Inbox_Contract_v1.0.0_DRAFT.md`; `packaging/runbook_ubuntu.md`; `scripts/check_relay_compatibility.sh`; `scripts/verify_remote.sh`; `scripts/aws_update_and_verify.sh`; `scripts/ci/test_relay_deploy_compatibility_guard.sh`; `TRACEABILITY.md`
