@@ -27,7 +27,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/v1/pull?"):
-            self.send_response(404)
+            self.send_response(204)
         elif self.path.startswith("/v1/pull/"):
             self.send_response(204)
         else:
@@ -53,11 +53,11 @@ fi
 
 rg -q 'check_relay_compatibility.sh' "${REPO_ROOT}/scripts/verify_remote.sh"
 rg -q 'check_relay_compatibility.sh' "${REPO_ROOT}/scripts/aws_update_and_verify.sh"
-rg -q 'legacy_only_deploy' "${REPO_ROOT}/scripts/check_relay_compatibility.sh"
+rg -q 'legacy_path_still_enabled' "${REPO_ROOT}/scripts/check_relay_compatibility.sh"
 rg -Fq '/v1/pull?max=1' "${REPO_ROOT}/scripts/check_relay_compatibility.sh"
 rg -Fq '/v1/pull/${CHANNEL}?max=1' "${REPO_ROOT}/scripts/check_relay_compatibility.sh"
 rg -Fq 'install -d -m 0755 "$LOG_DIR"' "${REPO_ROOT}/scripts/verify_remote.sh"
-rg -q 'QSL_RELAY_COMPAT_RESULT FAIL code=legacy_only_deploy' "${TMP_DIR}/guard.out"
+rg -q 'QSL_RELAY_COMPAT_RESULT FAIL code=legacy_path_still_enabled' "${TMP_DIR}/guard.out"
 rg -Fq 'Run `scripts/verify_remote.sh` before any real-world validation' "${REPO_ROOT}/README.md"
 
 echo "relay deployment compatibility guard check passed"

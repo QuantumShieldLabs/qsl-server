@@ -1,6 +1,6 @@
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -98,10 +98,8 @@ const ROUTE_TOKEN_HEADER: &str = "x-qsl-route-token";
 
 pub fn app(state: AppState) -> Router {
     Router::new()
-        .route("/v1/push", post(push_message_canonical))
-        .route("/v1/push/:channel", post(push_message_legacy))
-        .route("/v1/pull", get(pull_message_canonical))
-        .route("/v1/pull/:channel", get(pull_message_legacy))
+        .route("/v1/push", post(push_message))
+        .route("/v1/pull", get(pull_message))
         .with_state(state)
 }
 
@@ -130,61 +128,29 @@ fn auth_ok(headers: &HeaderMap, relay_token: Option<&str>) -> bool {
     }
 }
 
-fn resolve_route_token(
-    headers: &HeaderMap,
-    path_token: Option<&str>,
-) -> Result<String, &'static str> {
-    let header_token = match headers.get(ROUTE_TOKEN_HEADER) {
-        None => None,
+fn resolve_route_token(headers: &HeaderMap) -> Result<String, &'static str> {
+    match headers.get(ROUTE_TOKEN_HEADER) {
+        None => Err("ERR_MISSING_ROUTE_TOKEN"),
         Some(raw) => {
             let raw = raw.to_str().map_err(|_| "ERR_BAD_ROUTE_TOKEN")?;
             let token = raw.trim();
             if token.is_empty() {
                 return Err("ERR_MISSING_ROUTE_TOKEN");
             }
-            Some(token.to_string())
+            Ok(token.to_string())
         }
-    };
-    let path_token = path_token
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToString::to_string);
-    match (path_token, header_token) {
-        (None, None) => Err("ERR_MISSING_ROUTE_TOKEN"),
-        (None, Some(header)) => Ok(header),
-        (Some(path), None) => Ok(path),
-        (Some(path), Some(header)) if path == header => Ok(header),
-        (Some(_), Some(_)) => Err("ERR_ROUTE_TOKEN_MISMATCH"),
     }
 }
 
-async fn push_message_canonical(
+async fn push_message(
     State(st): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    push_message_inner(st, None, headers, body).await
-}
-
-async fn push_message_legacy(
-    State(st): State<AppState>,
-    Path(channel): Path<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    push_message_inner(st, Some(channel.as_str()), headers, body).await
-}
-
-async fn push_message_inner(
-    st: AppState,
-    path_token: Option<&str>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     if !auth_ok(&headers, st.relay_token.as_deref()) {
         return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
     }
-    let channel = match resolve_route_token(&headers, path_token) {
+    let channel = match resolve_route_token(&headers) {
         Ok(v) => v,
         Err(code) => return (StatusCode::BAD_REQUEST, code).into_response(),
     };
@@ -226,33 +192,15 @@ async fn push_message_inner(
     (StatusCode::OK, Json(PostResp { id: msg_id })).into_response()
 }
 
-async fn pull_message_canonical(
+async fn pull_message(
     State(st): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<PullQuery>,
-) -> impl IntoResponse {
-    pull_message_inner(st, None, headers, query).await
-}
-
-async fn pull_message_legacy(
-    State(st): State<AppState>,
-    Path(channel): Path<String>,
-    headers: HeaderMap,
-    Query(query): Query<PullQuery>,
-) -> impl IntoResponse {
-    pull_message_inner(st, Some(channel.as_str()), headers, query).await
-}
-
-async fn pull_message_inner(
-    st: AppState,
-    path_token: Option<&str>,
-    headers: HeaderMap,
-    query: PullQuery,
 ) -> impl IntoResponse {
     if !auth_ok(&headers, st.relay_token.as_deref()) {
         return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
     }
-    let channel = match resolve_route_token(&headers, path_token) {
+    let channel = match resolve_route_token(&headers) {
         Ok(v) => v,
         Err(code) => return (StatusCode::BAD_REQUEST, code).into_response(),
     };
@@ -341,6 +289,35 @@ mod tests {
         items: Vec<PullItem>,
     }
 
+    async fn canonical_push(
+        client: &reqwest::Client,
+        base: &str,
+        token: &str,
+        body: Vec<u8>,
+    ) -> reqwest::Response {
+        client
+            .post(format!("{}/v1/push", base))
+            .header(ROUTE_TOKEN_HEADER, token)
+            .body(body)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    async fn canonical_pull(
+        client: &reqwest::Client,
+        base: &str,
+        token: &str,
+        max: usize,
+    ) -> reqwest::Response {
+        client
+            .get(format!("{}/v1/pull?max={}", base, max))
+            .header(ROUTE_TOKEN_HEADER, token)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
     #[tokio::test]
     async fn push_then_pull_roundtrip() {
         let (base, handle) = spawn_server(Limits {
@@ -351,19 +328,10 @@ mod tests {
 
         let client = reqwest::Client::new();
         let payload = b"opaque-bytes".to_vec();
-        let push = client
-            .post(format!("{}/v1/push/test", base))
-            .body(payload.clone())
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let push = canonical_push(&client, &base, "test", payload.clone()).await;
         assert_eq!(push.status(), ReqStatus::OK);
 
-        let pull = client
-            .get(format!("{}/v1/pull/test?max=1", base))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull = canonical_pull(&client, &base, "test", 1).await;
         assert_eq!(pull.status(), ReqStatus::OK);
         let body: PullResp = pull.json().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body.items.len(), 1);
@@ -381,11 +349,7 @@ mod tests {
         })
         .await;
         let client = reqwest::Client::new();
-        let pull = client
-            .get(format!("{}/v1/pull/empty?max=1", base))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull = canonical_pull(&client, &base, "empty", 1).await;
         assert_eq!(pull.status(), ReqStatus::NO_CONTENT);
         handle.abort();
     }
@@ -398,21 +362,12 @@ mod tests {
         })
         .await;
         let client = reqwest::Client::new();
-        let push = client
-            .post(format!("{}/v1/push/oversize", base))
-            .body(vec![0u8; 5])
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let push = canonical_push(&client, &base, "oversize", vec![0u8; 5]).await;
         assert_eq!(push.status(), ReqStatus::PAYLOAD_TOO_LARGE);
         let body = push.text().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body, "ERR_TOO_LARGE");
 
-        let pull = client
-            .get(format!("{}/v1/pull/oversize?max=1", base))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull = canonical_pull(&client, &base, "oversize", 1).await;
         assert_eq!(pull.status(), ReqStatus::NO_CONTENT);
         handle.abort();
     }
@@ -425,39 +380,21 @@ mod tests {
         })
         .await;
         let client = reqwest::Client::new();
-        let r1 = client
-            .post(format!("{}/v1/push/qfull", base))
-            .body(b"a".to_vec())
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let r1 = canonical_push(&client, &base, "qfull", b"a".to_vec()).await;
         assert_eq!(r1.status(), ReqStatus::OK);
 
-        let r2 = client
-            .post(format!("{}/v1/push/qfull", base))
-            .body(b"b".to_vec())
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let r2 = canonical_push(&client, &base, "qfull", b"b".to_vec()).await;
         assert_eq!(r2.status(), ReqStatus::TOO_MANY_REQUESTS);
         let body = r2.text().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body, "ERR_OVERLOADED");
 
-        let pull1 = client
-            .get(format!("{}/v1/pull/qfull?max=1", base))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull1 = canonical_pull(&client, &base, "qfull", 1).await;
         assert_eq!(pull1.status(), ReqStatus::OK);
         let body1: PullResp = pull1.json().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body1.items.len(), 1);
         assert!(!body1.items[0].id.is_empty());
 
-        let pull2 = client
-            .get(format!("{}/v1/pull/qfull?max=1", base))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull2 = canonical_pull(&client, &base, "qfull", 1).await;
         assert_eq!(pull2.status(), ReqStatus::NO_CONTENT);
         handle.abort();
     }
@@ -471,43 +408,21 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
 
-        let _ = client
-            .post(format!("{}/v1/push/two", base))
-            .body(b"a".to_vec())
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
-        let _ = client
-            .post(format!("{}/v1/push/two", base))
-            .body(b"b".to_vec())
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let _ = canonical_push(&client, &base, "two", b"a".to_vec()).await;
+        let _ = canonical_push(&client, &base, "two", b"b".to_vec()).await;
 
-        let pull1 = client
-            .get(format!("{}/v1/pull/two?max=1", base))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull1 = canonical_pull(&client, &base, "two", 1).await;
         assert_eq!(pull1.status(), ReqStatus::OK);
         let body1: PullResp = pull1.json().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body1.items.len(), 1);
 
-        let pull2 = client
-            .get(format!("{}/v1/pull/two?max=2", base))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull2 = canonical_pull(&client, &base, "two", 2).await;
         assert_eq!(pull2.status(), ReqStatus::OK);
         let body2: PullResp = pull2.json().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body2.items.len(), 1);
         assert!(!body2.items[0].id.is_empty());
 
-        let pull3 = client
-            .get(format!("{}/v1/pull/two?max=1", base))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull3 = canonical_pull(&client, &base, "two", 1).await;
         assert_eq!(pull3.status(), ReqStatus::NO_CONTENT);
 
         handle.abort();
@@ -530,12 +445,7 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
         let payload = b"SECRET_PAYLOAD_ABC".to_vec();
-        let _ = client
-            .post(format!("{}/v1/push/nolog", base))
-            .body(payload)
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let _ = canonical_push(&client, &base, "nolog", payload).await;
 
         handle.abort();
 
@@ -572,18 +482,9 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
         let payload = b"log-redaction".to_vec();
-        let push = client
-            .post(format!("{}/v1/push/{}", base, channel))
-            .body(payload)
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let push = canonical_push(&client, &base, channel, payload).await;
         assert_eq!(push.status(), ReqStatus::OK);
-        let pull = client
-            .get(format!("{}/v1/pull/{}?max=1", base, channel))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull = canonical_pull(&client, &base, channel, 1).await;
         assert_eq!(pull.status(), ReqStatus::OK);
 
         handle.abort();
@@ -612,20 +513,10 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
 
-        let first = client
-            .post(format!("{}/v1/push/{}", base, channel))
-            .body(b"a".to_vec())
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let first = canonical_push(&client, &base, channel, b"a".to_vec()).await;
         assert_eq!(first.status(), ReqStatus::OK);
 
-        let second = client
-            .post(format!("{}/v1/push/{}", base, channel))
-            .body(b"b".to_vec())
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let second = canonical_push(&client, &base, channel, b"b".to_vec()).await;
         assert_eq!(second.status(), ReqStatus::TOO_MANY_REQUESTS);
         let body = second.text().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body, "ERR_OVERLOADED");
@@ -667,19 +558,10 @@ mod tests {
         let client = reqwest::Client::new();
         let payload = b"auth-disabled".to_vec();
 
-        let push = client
-            .post(format!("{}/v1/push/open", base))
-            .body(payload.clone())
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let push = canonical_push(&client, &base, "open", payload.clone()).await;
         assert_eq!(push.status(), ReqStatus::OK);
 
-        let pull = client
-            .get(format!("{}/v1/pull/open?max=1", base))
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let pull = canonical_pull(&client, &base, "open", 1).await;
         assert_eq!(pull.status(), ReqStatus::OK);
         let body: PullResp = pull.json().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body.items.len(), 1);

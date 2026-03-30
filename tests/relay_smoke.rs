@@ -126,36 +126,7 @@ async fn queue_full_returns_429() {
 }
 
 #[tokio::test]
-async fn legacy_path_roundtrip_still_works_during_compatibility_window() {
-    let (base, handle) = spawn_server(Limits {
-        max_body_bytes: 1024 * 1024,
-        max_queue_depth: 8,
-    })
-    .await;
-    let client = reqwest::Client::new();
-    let payload = b"legacy-compat".to_vec();
-    let push = client
-        .post(format!("{}/v1/push/legacy", base))
-        .body(payload.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(push.status(), ReqStatus::OK);
-
-    let pull = client
-        .get(format!("{}/v1/pull/legacy?max=1", base))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(pull.status(), ReqStatus::OK);
-    let body: PullResp = pull.json().await.unwrap();
-    assert_eq!(body.items.len(), 1);
-    assert_eq!(body.items[0].data.as_slice(), payload.as_slice());
-    handle.abort();
-}
-
-#[tokio::test]
-async fn legacy_path_header_mismatch_rejects_without_mutation() {
+async fn legacy_path_push_is_retired_without_mutating_queue() {
     let (base, handle) = spawn_server(Limits {
         max_body_bytes: 1024 * 1024,
         max_queue_depth: 8,
@@ -163,17 +134,17 @@ async fn legacy_path_header_mismatch_rejects_without_mutation() {
     .await;
     let client = reqwest::Client::new();
     let push = client
-        .post(format!("{}/v1/push/legacy-token", base))
-        .header(ROUTE_TOKEN_HEADER, "other-token")
-        .body(b"mismatch".to_vec())
+        .post(format!("{}/v1/push/legacy-retired", base))
+        .header(ROUTE_TOKEN_HEADER, "legacy-retired")
+        .body(b"same".to_vec())
         .send()
         .await
         .unwrap();
-    assert_eq!(push.status(), ReqStatus::BAD_REQUEST);
-    assert_eq!(push.text().await.unwrap(), "ERR_ROUTE_TOKEN_MISMATCH");
+    assert_eq!(push.status(), ReqStatus::NOT_FOUND);
 
     let pull = client
-        .get(format!("{}/v1/pull/legacy-token?max=1", base))
+        .get(format!("{}/v1/pull?max=1", base))
+        .header(ROUTE_TOKEN_HEADER, "legacy-retired")
         .send()
         .await
         .unwrap();
@@ -182,32 +153,30 @@ async fn legacy_path_header_mismatch_rejects_without_mutation() {
 }
 
 #[tokio::test]
-async fn legacy_path_header_equal_is_accepted() {
+async fn legacy_path_pull_is_retired_without_consuming_canonical_queue() {
     let (base, handle) = spawn_server(Limits {
         max_body_bytes: 1024 * 1024,
         max_queue_depth: 8,
     })
     .await;
     let client = reqwest::Client::new();
-    let push = client
-        .post(format!("{}/v1/push/legacy-equal", base))
-        .header(ROUTE_TOKEN_HEADER, "legacy-equal")
-        .body(b"same".to_vec())
-        .send()
-        .await
-        .unwrap();
+    let payload = b"canonical-only".to_vec();
+    let push = canonical_push(&client, &base, "legacy-retired", payload.clone()).await;
     assert_eq!(push.status(), ReqStatus::OK);
 
-    let pull = client
-        .get(format!("{}/v1/pull/legacy-equal?max=1", base))
-        .header(ROUTE_TOKEN_HEADER, "legacy-equal")
+    let legacy_pull = client
+        .get(format!("{}/v1/pull/legacy-retired?max=1", base))
+        .header(ROUTE_TOKEN_HEADER, "legacy-retired")
         .send()
         .await
         .unwrap();
-    assert_eq!(pull.status(), ReqStatus::OK);
-    let body: PullResp = pull.json().await.unwrap();
+    assert_eq!(legacy_pull.status(), ReqStatus::NOT_FOUND);
+
+    let canonical_pull = canonical_pull(&client, &base, "legacy-retired", 1).await;
+    assert_eq!(canonical_pull.status(), ReqStatus::OK);
+    let body: PullResp = canonical_pull.json().await.unwrap();
     assert_eq!(body.items.len(), 1);
-    assert_eq!(body.items[0].data.as_slice(), b"same");
+    assert_eq!(body.items[0].data.as_slice(), payload.as_slice());
     handle.abort();
 }
 

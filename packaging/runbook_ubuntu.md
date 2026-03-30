@@ -48,7 +48,7 @@ sudo systemctl status qsl-server --no-pager
 Use `packaging/caddy/Caddyfile.example` as baseline.
 
 - Route public traffic to `127.0.0.1:8080`.
-- Keep `/v1/*` access logging disabled/sanitized during the compatibility window. Canonical clients use `X-QSL-Route-Token`, but legacy path-based clients may still place route tokens in request URIs until explicit removal.
+- Keep `/v1/*` access logging disabled/sanitized. Supported clients use `X-QSL-Route-Token`, and legacy path-based route-token requests are now retired rather than tolerated.
 
 Restart Caddy after config changes.
 

@@ -43,10 +43,6 @@ echo "QSL_RELAY_COMPAT base=${base} canonical_status=${canonical_status} legacy_
 case "$canonical_status" in
   200|204|401) ;;
   404|405)
-    if [[ "$legacy_status" == "200" || "$legacy_status" == "204" || "$legacy_status" == "401" ]]; then
-      echo "QSL_RELAY_COMPAT_RESULT FAIL code=legacy_only_deploy"
-      exit 1
-    fi
     echo "QSL_RELAY_COMPAT_RESULT FAIL code=canonical_unavailable"
     exit 1
     ;;
@@ -56,8 +52,16 @@ case "$canonical_status" in
     ;;
 esac
 
-if [[ "$legacy_status" == "200" || "$legacy_status" == "204" || "$legacy_status" == "401" ]]; then
-  echo "QSL_RELAY_COMPAT_RESULT PASS code=canonical_ok legacy_compat=present"
-else
-  echo "QSL_RELAY_COMPAT_RESULT PASS code=canonical_ok legacy_compat=absent_or_disabled"
-fi
+case "$legacy_status" in
+  404|405)
+    echo "QSL_RELAY_COMPAT_RESULT PASS code=canonical_ok legacy_path=retired"
+    ;;
+  200|204|401)
+    echo "QSL_RELAY_COMPAT_RESULT FAIL code=legacy_path_still_enabled"
+    exit 1
+    ;;
+  *)
+    echo "QSL_RELAY_COMPAT_RESULT FAIL code=legacy_status_${legacy_status}"
+    exit 1
+    ;;
+esac

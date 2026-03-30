@@ -12,11 +12,10 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 - Fail-closed with deterministic errors.
 - No secret/payload logging.
 
-## API (canonical + compatibility window)
+## API
 - Canonical push: `POST /v1/push` with `X-QSL-Route-Token: <token>` -> `{ "id": "<msg_id>" }`
 - Canonical pull: `GET /v1/pull?max=N` with `X-QSL-Route-Token: <token>` -> oldest message bytes (200) or 204 if empty
-- Compatibility-only legacy shape: `POST /v1/push/{channel}` and `GET /v1/pull/{channel}?max=N`
-- Compatibility note: `{channel}` on the legacy shape carries the route token in the request URI. Decision D-0009 makes the header-based shape canonical and keeps the path-based shape only for the compatibility window; do not place real route tokens in docs, screenshots, or copied command lines.
+- Legacy path-token routes are retired. `POST /v1/push/{channel}` and `GET /v1/pull/{channel}?max=N` are no longer supported because they carry the route token in the request URI.
 
 ## Behavior and limits
 - `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`
@@ -83,7 +82,7 @@ The verify script checks:
 
 Fail-fast rule:
 - Run `scripts/verify_remote.sh` before any real-world validation or qsc relay test.
-- A deployment that answers the legacy path-token pull shape while failing canonical `/v1/pull?max=1` is deployment drift, not a weak-host saturation result and not a qsl-attachments defect.
+- A deployment that still answers the legacy path-token pull shape is deployment drift, not a weak-host saturation result and not a qsl-attachments defect.
 
 ## Scope boundary
 - Payloads are opaque bytes; the relay does not parse or interpret protocol messages.
