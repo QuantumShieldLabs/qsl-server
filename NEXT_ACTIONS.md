@@ -396,3 +396,32 @@ Evidence:
 - Evidence hygiene:
   - docs/scripts/tests scope only; no `src/**`, `Cargo.toml`, `Cargo.lock`, workflow, qsl-protocol, or qsl-attachments files changed
   - no raw bearer tokens, route tokens, or capability-like secrets were printed or committed
+
+### NA-0012 — Route-Token URI Compatibility Retirement + Secret-Ingress Remediation
+
+Status: READY
+
+Problem:
+- The next load-bearing blocker in qsl-server is retiring legacy URI-carried route-token compatibility paths and aligning relay secret-ingress handling with the frozen metadata / secret-hygiene contract.
+
+Scope:
+- qsl-server runtime/tests/docs/scripts as needed to retire URI-carried route-token compatibility paths and keep the canonical header-based posture truthful
+- qsl-protocol linkage/evidence as needed
+- no qsl-attachments work
+- no website/.github work
+
+Must protect:
+- qsl-server remains transport-only
+- canonical header-carried routing remains authoritative
+- no raw route tokens or bearer secrets leak through passive logs, URLs, scripts, or operator-visible outputs where the frozen contract forbids them
+
+Deliverables:
+1) retire URI-carried route-token compatibility paths truthfully
+2) update scripts/tests/docs to the canonical header-based posture
+3) prove the relay remains transport-only and fail-closed
+4) update queue/evidence truthfully
+
+Acceptance:
+1) URI-carried route-token compatibility paths are retired truthfully
+2) no relay semantic redesign occurs
+3) queue/evidence updated truthfully
