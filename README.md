@@ -14,13 +14,15 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 
 ## API
 - Canonical push: `POST /v1/push` with `X-QSL-Route-Token: <token>` -> `{ "id": "<msg_id>" }`
-- Canonical pull: `GET /v1/pull?max=N` with `X-QSL-Route-Token: <token>` -> oldest message bytes (200) or 204 if empty
+- Canonical pull: `GET /v1/pull?max=N` with `X-QSL-Route-Token: <token>` -> JSON `{ "items": [ { "id": "<msg_id>", "data": [<byte>, ...] }, ... ] }` (200) or 204 if empty
 - Legacy path-token routes are retired. `POST /v1/push/{channel}` and `GET /v1/pull/{channel}?max=N` are no longer supported because they carry the route token in the request URI.
 
 ## Behavior and limits
 - `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`
 - `MAX_QUEUE_DEPTH` (default 256) → 429 + `ERR_OVERLOADED`
 - Empty body → 400 + `ERR_EMPTY_BODY`
+- Invalid `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` values are currently treated as unset, and values above the built-in ceilings are capped. Fail-closed startup for invalid size/depth config is a future hardening decision, not current behavior.
+- `RELAY_TOKEN` is optional. When set, canonical push/pull require `Authorization: Bearer <token>` and reject missing or invalid bearer tokens with 401 `ERR_UNAUTHORIZED` before mutating queues. When unset or empty, relay auth is disabled and route-token header checks still apply.
 
 ## Run (local)
 ```bash

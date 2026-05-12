@@ -49,12 +49,19 @@ These are required for production deployments. Values below are recommended ceil
 - **IP logging:** avoid full client IP logging unless required for abuse mitigation; prefer sampled logs.
 
 ## Authentication policy
-- **Current stance:** no authentication at relay layer.
+- **Current stance:** qsl-server supports optional relay bearer-token authentication through `RELAY_TOKEN`.
+- **When `RELAY_TOKEN` is set:** canonical push/pull require `Authorization: Bearer <token>` and reject missing or invalid bearer tokens with `401 ERR_UNAUTHORIZED` before mutating queues.
+- **When `RELAY_TOKEN` is unset or empty:** relay auth is disabled; deployments must rely on compensating controls and the canonical `X-QSL-Route-Token` header remains required for route selection.
 - **Compensating controls required:**
   - strict network ACLs (Security Group rules)
   - enforced size/queue limits
   - optional upstream rate limiting
-- **Future auth:** if authentication is required, it must be introduced in a separate NA with explicit threat model.
+- **Future auth hardening:** any stronger auth or authorization semantics must be introduced in a separate NA with explicit threat model and executable no-mutation tests.
+
+## Configuration parsing boundary
+- `MAX_BODY_BYTES` and `MAX_QUEUE_DEPTH` default to 1 MiB and 256.
+- Current implementation treats invalid `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` values as unset and caps values above the built-in ceilings.
+- Fail-closed startup on invalid size/depth config is a future hardening decision; this document does not claim that behavior is implemented.
 
 ## Operational checklist (deployment)
 - [ ] TLS termination configured upstream (ALB/Nginx) with HTTPS-only ingress
@@ -64,6 +71,7 @@ These are required for production deployments. Values below are recommended ceil
 - [ ] Health checks configured (HTTP 200/204 behavior documented)
 - [ ] Logs reviewed to ensure no payload/secret leakage
 - [ ] Systemd hardening plan applied per DOC-SRV-002 (implementation NA)
+- [ ] `RELAY_TOKEN` mode explicitly selected and documented for the deployment.
 
 ## Observability
 - **Safe metrics:** request counts, response codes, queue depth, size limit hits

@@ -5,8 +5,8 @@
 - no `src/**`, `Cargo.toml`, `Cargo.lock`, workflow, qsl-protocol, or qsl-attachments changes
 
 ## Current-source proof
-- qsl-server `main` already implements canonical header-based carriage on `POST /v1/push` and `GET /v1/pull?max=N`.
-- qsl-server `main` also still exposes the legacy compatibility routes `POST /v1/push/:channel` and `GET /v1/pull/:channel?max=N`.
+- At the NA-0011 snapshot, qsl-server `main` implemented canonical header-based carriage on `POST /v1/push` and `GET /v1/pull?max=N` while still exposing the legacy compatibility routes `POST /v1/push/:channel` and `GET /v1/pull/:channel?max=N`.
+- Current qsl-server code has since retired those legacy path-token routes; they return 404 and do not mutate or consume canonical queues.
 - The blocker for `NA-0200A` was deployment drift on the live relay, not missing source support in qsl-server.
 
 ## Before restore: live drift proof
