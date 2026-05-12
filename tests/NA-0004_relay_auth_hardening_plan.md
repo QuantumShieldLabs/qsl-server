@@ -17,7 +17,7 @@
 ## Limit/overflow vectors
 
 - Oversize body => `413 ERR_TOO_LARGE`
-- Queue depth exceeded => `429 ERR_QUEUE_FULL`
+- Queue depth exceeded => `429 ERR_OVERLOADED`
 
 ## Logging-redaction checks
 

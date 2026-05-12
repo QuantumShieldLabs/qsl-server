@@ -24,7 +24,7 @@ Define server-side hardening requirements for relay push/pull endpoints:
 
 - Unauthorized: `401 ERR_UNAUTHORIZED`
 - Request too large: `413 ERR_TOO_LARGE`
-- Queue full: `429 ERR_QUEUE_FULL`
+- Queue full: `429 ERR_OVERLOADED`
 - Handler/startup failures from parse/IO/config must map to deterministic non-panic errors.
 
 ## Runtime Hardening
@@ -45,5 +45,6 @@ Define server-side hardening requirements for relay push/pull endpoints:
   - missing/invalid token => `401 ERR_UNAUTHORIZED`
   - valid token => normal flow
   - auth disabled when `RELAY_TOKEN` is unset/empty
+- Canonical routes still require `X-QSL-Route-Token`; `Authorization: Bearer ...` is relay auth only and is not used as the route token.
 - Runtime request-path lock poisoning returns deterministic `500 ERR_LOCK_POISON` (no panic).
 - Startup parse/bind/serve panic paths are removed; failures are logged with deterministic error codes.

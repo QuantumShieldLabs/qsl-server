@@ -12,7 +12,7 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
 ### PUSH (store)
 - Input:
   - channel_id (opaque, client-chosen)
-  - message_id (opaque, client-chosen; idempotency key)
+  - message_id / `x-msg-id` (opaque, client-chosen identifier when supplied)
   - ciphertext blob
 - Behavior:
   - Accepts only opaque ciphertext.
@@ -65,12 +65,14 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
   - Rejects:
     - missing/empty route-token header → 400 `ERR_MISSING_ROUTE_TOKEN`
     - oversize → 413 `ERR_TOO_LARGE`
-    - queue full → 429 `ERR_QUEUE_FULL`
+    - queue full → 429 `ERR_OVERLOADED`
 - Canonical endpoint: `GET /v1/pull?max=N`
   - Required header: `x-qsl-route-token`
   - Returns 204 if empty.
   - Returns JSON `{ "items": [ { "id": "<opaque>", "data": [u8...] }, ... ] }`.
 - Legacy `/v1/push/:channel` and `/v1/pull/:channel?max=N` are retired and must not be reintroduced because they carry route tokens in the request URI.
+- Current `x-msg-id` behavior is not idempotency: each accepted push appends a queue item, even when the same identifier is supplied more than once. Idempotent duplicate handling is a future service semantic decision and requires executable tests before it can be claimed.
+- Current `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` config behavior falls back to defaults when invalid values are supplied and caps values above built-in ceilings. Fail-closed startup for invalid size/depth config is a future hardening decision.
 - Retention/TTL: not implemented yet; bounded by queue depth only (follow-on).
 
 ## Deployment notes
