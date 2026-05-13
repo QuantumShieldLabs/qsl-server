@@ -23,10 +23,11 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 - `MAX_QUEUE_DEPTH` (default 256) → 429 + `ERR_OVERLOADED`
 - `MAX_ROUTE_COUNT` (default 256) caps live route slots. Accepted pushes to new routes create slots only when the cap allows; new-route pushes beyond the cap return 429 + `ERR_ROUTE_CAP`.
 - `PUSH_RATE_BURST` (default 256) and `PUSH_RATE_REFILL_PER_SEC` (default 256, `0` allowed to disable refill) provide a local in-app per-route push token bucket. Pushes beyond available tokens return 429 + `ERR_RATE_LIMITED`.
+- `ROUTE_IDLE_TTL_MS` (default 300000, capped at 86400000) applies a Time-based idle TTL to route slots. Cleanup runs deterministically on canonical push/pull after auth, route-token, body-size, and pull-`max` validation. Expired routes are removed with queued messages discarded, releasing route capacity and per-route rate accounting before the current accepted request is evaluated.
 - Empty body → 400 + `ERR_EMPTY_BODY`
-- Missing limit values use defaults. Non-numeric values fail startup with deterministic config errors. Zero values fail startup for `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, and `PUSH_RATE_BURST`; `PUSH_RATE_REFILL_PER_SEC=0` is allowed for deterministic no-refill operation. Values above the built-in ceilings are capped.
+- Missing limit values use defaults. Non-numeric values fail startup with deterministic config errors. Zero values fail startup for `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, `PUSH_RATE_BURST`, and `ROUTE_IDLE_TTL_MS`; `PUSH_RATE_REFILL_PER_SEC=0` is allowed for deterministic no-refill operation. Values above the built-in ceilings are capped.
 - `RELAY_TOKEN` is optional. When set, canonical push/pull require `Authorization: Bearer <token>` and reject missing or invalid bearer tokens with 401 `ERR_UNAUTHORIZED` before mutating queues. When unset or empty, relay auth is disabled and route-token header checks still apply.
-- Unknown pulls return 204 without creating route slots. Draining a route to empty removes the live slot, releasing global route capacity.
+- Unknown pulls return 204 without creating route slots. Draining a route to empty removes the live slot, releasing global route capacity and per-route rate accounting.
 - Rate and global route-cap controls are minimal local in-app hardening primitives. They do not approve production deployment, and reverse proxy / edge rate limiting remains a separate deployment layer.
 
 ## Run (local)
@@ -38,7 +39,7 @@ cargo run
 CLI overrides env, env overrides defaults:
 
 ```bash
-qsl-server --bind 0.0.0.0 --port 8080 --max-body-bytes 1048576 --max-queue-depth 256 --max-route-count 256 --push-rate-burst 256 --push-rate-refill-per-sec 256
+qsl-server --bind 0.0.0.0 --port 8080 --max-body-bytes 1048576 --max-queue-depth 256 --max-route-count 256 --push-rate-burst 256 --push-rate-refill-per-sec 256 --route-idle-ttl-ms 300000
 ```
 
 Environment defaults:
@@ -49,6 +50,7 @@ Environment defaults:
 - `MAX_ROUTE_COUNT=256`
 - `PUSH_RATE_BURST=256`
 - `PUSH_RATE_REFILL_PER_SEC=256`
+- `ROUTE_IDLE_TTL_MS=300000`
 
 ## Remote deployment (Ubuntu 24.04 + systemd)
 

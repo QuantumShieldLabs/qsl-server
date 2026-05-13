@@ -42,6 +42,10 @@ These are required for production deployments. Values below are recommended ceil
   - **Default:** 256
   - **Recommended ceiling:** 4096 (do not exceed without review)
   - **Rationale:** bounds local in-app per-route push token refill; `0` is allowed to disable refill
+- `ROUTE_IDLE_TTL_MS`
+  - **Default:** 300,000 (5 minutes)
+  - **Recommended ceiling:** 86,400,000 (24 hours; do not exceed without review)
+  - **Rationale:** bounds idle route/message retention and releases route capacity/accounting on deterministic access-triggered cleanup
 - `PORT`
   - **Default:** 8080
   - **Allowed range:** 1024–65535 (avoid 80/443 at the app layer if TLS is terminated upstream)
@@ -67,14 +71,14 @@ These are required for production deployments. Values below are recommended ceil
 - **Compensating controls required:**
   - strict network ACLs (Security Group rules)
   - enforced size/queue limits
-  - local in-app route/rate caps
+  - local in-app route/rate caps and route idle TTL
   - upstream reverse-proxy or edge rate limiting
 - **Future auth hardening:** any stronger auth or authorization semantics must be introduced in a separate NA with explicit threat model and executable no-mutation tests.
 
 ## Configuration parsing boundary
-- `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, `PUSH_RATE_BURST`, and `PUSH_RATE_REFILL_PER_SEC` have deterministic defaults.
-- Current implementation treats missing values as defaults, rejects non-numeric values at startup with deterministic config errors, rejects zero for `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, and `PUSH_RATE_BURST`, allows `PUSH_RATE_REFILL_PER_SEC=0` for deterministic no-refill operation, and caps values above the built-in ceilings.
-- Unknown pulls return 204 without creating route slots. Accepted pushes create live route slots only when `MAX_ROUTE_COUNT` allows, and draining a route to empty removes the slot.
+- `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, `PUSH_RATE_BURST`, `PUSH_RATE_REFILL_PER_SEC`, and `ROUTE_IDLE_TTL_MS` have deterministic defaults.
+- Current implementation treats missing values as defaults, rejects non-numeric values at startup with deterministic config errors, rejects zero for `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, `PUSH_RATE_BURST`, and `ROUTE_IDLE_TTL_MS`, allows `PUSH_RATE_REFILL_PER_SEC=0` for deterministic no-refill operation, and caps values above the built-in ceilings.
+- Unknown pulls return 204 without creating route slots. Accepted pushes create live route slots only when `MAX_ROUTE_COUNT` allows, draining a route to empty removes the slot, and Time-based idle TTL cleanup removes expired routes with queued messages discarded.
 - Local in-app route/rate caps are not a substitute for deployment-layer proxy, firewall, and edge controls.
 
 ## Operational checklist (deployment)
@@ -85,6 +89,7 @@ These are required for production deployments. Values below are recommended ceil
 - [ ] `MAX_ROUTE_COUNT` set explicitly (≤ 256 unless exception approved)
 - [ ] `PUSH_RATE_BURST` set explicitly (≤ 256 unless exception approved)
 - [ ] `PUSH_RATE_REFILL_PER_SEC` set explicitly (≤ 4096 unless exception approved; 0 allowed only when no-refill behavior is intended)
+- [ ] `ROUTE_IDLE_TTL_MS` set explicitly (≤ 86400000 unless exception approved; 0 is rejected)
 - [ ] Health checks configured (HTTP 200/204 behavior documented)
 - [ ] Logs reviewed to ensure no payload/secret leakage
 - [ ] Systemd hardening plan applied per DOC-SRV-002 (implementation NA)
@@ -108,6 +113,7 @@ Use this checklist when applying NA-0002 changes:
   - MAX_ROUTE_COUNT (<= 256 recommended ceiling)
   - PUSH_RATE_BURST (<= 256 recommended ceiling)
   - PUSH_RATE_REFILL_PER_SEC (<= 4096 recommended ceiling)
+  - ROUTE_IDLE_TTL_MS (<= 86400000 recommended ceiling)
   - PORT (default 8080; avoid 80/443 at app layer)
 - [ ] Verify service health with the repo verify script (if available).
 - [ ] Confirm logs contain no payload bytes or secrets (grep guard).

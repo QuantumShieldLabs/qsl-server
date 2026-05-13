@@ -3,7 +3,7 @@ use std::{env, net::SocketAddr};
 use clap::Parser;
 use qsl_server::{
     app, AppState, Limits, ResourceControls, MAX_BODY_BYTES_CEILING, MAX_PUSH_RATE_BURST_CEILING,
-    MAX_QUEUE_DEPTH_CEILING, MAX_ROUTE_COUNT_CEILING,
+    MAX_QUEUE_DEPTH_CEILING, MAX_ROUTE_COUNT_CEILING, ROUTE_IDLE_TTL_MS_DEFAULT,
 };
 use tokio::net::TcpListener;
 use tracing::info;
@@ -32,6 +32,9 @@ struct Cli {
     /// Per-route push token refill per second; 0 disables refill (env: PUSH_RATE_REFILL_PER_SEC, default: 256)
     #[arg(long)]
     push_rate_refill_per_sec: Option<usize>,
+    /// Route idle TTL in milliseconds (env: ROUTE_IDLE_TTL_MS, default: 300000)
+    #[arg(long)]
+    route_idle_ttl_ms: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -43,6 +46,7 @@ struct EnvVals {
     max_route_count: Option<usize>,
     push_rate_burst: Option<usize>,
     push_rate_refill_per_sec: Option<usize>,
+    route_idle_ttl_ms: Option<usize>,
 }
 
 impl EnvVals {
@@ -55,6 +59,7 @@ impl EnvVals {
             max_route_count: env_usize("MAX_ROUTE_COUNT")?,
             push_rate_burst: env_usize("PUSH_RATE_BURST")?,
             push_rate_refill_per_sec: env_usize("PUSH_RATE_REFILL_PER_SEC")?,
+            route_idle_ttl_ms: env_usize("ROUTE_IDLE_TTL_MS")?,
         })
     }
 }
@@ -117,14 +122,19 @@ fn resolve_config(cli: Cli, env: EnvVals) -> Result<Config, String> {
         .push_rate_refill_per_sec
         .or(env.push_rate_refill_per_sec)
         .unwrap_or(MAX_PUSH_RATE_BURST_CEILING);
+    let route_idle_ttl_ms = cli
+        .route_idle_ttl_ms
+        .or(env.route_idle_ttl_ms)
+        .unwrap_or(ROUTE_IDLE_TTL_MS_DEFAULT);
     Ok(Config {
         bind,
         port,
         limits: Limits::new(max_body_bytes, max_queue_depth)?,
-        controls: ResourceControls::new(
+        controls: ResourceControls::new_with_route_idle_ttl_ms(
             max_route_count,
             push_rate_burst,
             push_rate_refill_per_sec,
+            route_idle_ttl_ms,
         )?,
     })
 }
@@ -193,6 +203,7 @@ mod cli_tests {
             max_route_count: None,
             push_rate_burst: None,
             push_rate_refill_per_sec: None,
+            route_idle_ttl_ms: None,
         }
     }
 
@@ -206,11 +217,13 @@ mod cli_tests {
             max_route_count: Some(8),
             push_rate_burst: Some(7),
             push_rate_refill_per_sec: Some(6),
+            route_idle_ttl_ms: Some(5_000),
         };
         let mut env = env_vals(Some("0.0.0.0"), Some(8080), Some(1024), Some(1));
         env.max_route_count = Some(2);
         env.push_rate_burst = Some(3);
         env.push_rate_refill_per_sec = Some(4);
+        env.route_idle_ttl_ms = Some(3_000);
         let cfg = resolve_config(cli, env).unwrap();
         assert_eq!(cfg.bind, "0.0.0.0");
         assert_eq!(cfg.port, 9000);
@@ -219,6 +232,7 @@ mod cli_tests {
         assert_eq!(cfg.controls.max_route_count, 8);
         assert_eq!(cfg.controls.push_rate_burst, 7);
         assert_eq!(cfg.controls.push_rate_refill_per_sec, 6);
+        assert_eq!(cfg.controls.route_idle_ttl.as_millis(), 5_000);
     }
 
     #[test]
@@ -231,11 +245,13 @@ mod cli_tests {
             max_route_count: None,
             push_rate_burst: None,
             push_rate_refill_per_sec: None,
+            route_idle_ttl_ms: None,
         };
         let mut env = env_vals(Some("0.0.0.0"), Some(7070), Some(2048), Some(7));
         env.max_route_count = Some(6);
         env.push_rate_burst = Some(5);
         env.push_rate_refill_per_sec = Some(4);
+        env.route_idle_ttl_ms = Some(3_000);
         let cfg = resolve_config(cli, env).unwrap();
         assert_eq!(cfg.bind, "0.0.0.0");
         assert_eq!(cfg.port, 7070);
@@ -244,6 +260,7 @@ mod cli_tests {
         assert_eq!(cfg.controls.max_route_count, 6);
         assert_eq!(cfg.controls.push_rate_burst, 5);
         assert_eq!(cfg.controls.push_rate_refill_per_sec, 4);
+        assert_eq!(cfg.controls.route_idle_ttl.as_millis(), 3_000);
     }
 
     #[test]
@@ -256,6 +273,7 @@ mod cli_tests {
             max_route_count: Some(MAX_ROUTE_COUNT_CEILING * 2),
             push_rate_burst: Some(MAX_PUSH_RATE_BURST_CEILING * 2),
             push_rate_refill_per_sec: Some(MAX_PUSH_RATE_BURST_CEILING * 20),
+            route_idle_ttl_ms: Some(qsl_server::MAX_ROUTE_IDLE_TTL_MS_CEILING * 2),
         };
         let env = env_vals(None, None, None, None);
         let cfg = resolve_config(cli, env).unwrap();
@@ -266,6 +284,10 @@ mod cli_tests {
         assert_eq!(
             cfg.controls.push_rate_refill_per_sec,
             qsl_server::MAX_PUSH_RATE_REFILL_PER_SEC_CEILING
+        );
+        assert_eq!(
+            cfg.controls.route_idle_ttl.as_millis(),
+            qsl_server::MAX_ROUTE_IDLE_TTL_MS_CEILING as u128
         );
     }
 
@@ -279,6 +301,7 @@ mod cli_tests {
             max_route_count: None,
             push_rate_burst: None,
             push_rate_refill_per_sec: None,
+            route_idle_ttl_ms: None,
         };
         let env = env_vals(None, None, None, None);
         let cfg = resolve_config(cli, env).unwrap();
@@ -295,6 +318,7 @@ mod cli_tests {
             max_route_count: None,
             push_rate_burst: None,
             push_rate_refill_per_sec: None,
+            route_idle_ttl_ms: None,
         };
         let env = env_vals(None, None, None, None);
         let cfg = resolve_config(cli, env).unwrap();
@@ -311,6 +335,7 @@ mod cli_tests {
             max_route_count: None,
             push_rate_burst: None,
             push_rate_refill_per_sec: None,
+            route_idle_ttl_ms: None,
         };
         let env = env_vals(Some("0.0.0.0"), None, None, None);
         let cfg = resolve_config(cli, env).unwrap();
@@ -338,6 +363,7 @@ mod cli_tests {
                 max_route_count: None,
                 push_rate_burst: None,
                 push_rate_refill_per_sec: None,
+                route_idle_ttl_ms: None,
             },
             env,
         )
@@ -354,6 +380,7 @@ mod cli_tests {
                 max_route_count: None,
                 push_rate_burst: None,
                 push_rate_refill_per_sec: None,
+                route_idle_ttl_ms: None,
             },
             env,
         )
