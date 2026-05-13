@@ -35,8 +35,8 @@ impl EnvVals {
         Ok(Self {
             bind: env_opt("BIND_ADDR"),
             port: env_u16("PORT")?,
-            max_body_bytes: env_usize("MAX_BODY_BYTES"),
-            max_queue_depth: env_usize("MAX_QUEUE_DEPTH"),
+            max_body_bytes: env_usize("MAX_BODY_BYTES")?,
+            max_queue_depth: env_usize("MAX_QUEUE_DEPTH")?,
         })
     }
 }
@@ -62,11 +62,17 @@ fn env_u16(name: &str) -> Result<Option<u16>, String> {
     }
 }
 
-fn env_usize(name: &str) -> Option<usize> {
-    env::var(name).ok().and_then(|v| v.parse::<usize>().ok())
+fn env_usize(name: &str) -> Result<Option<usize>, String> {
+    match env_opt(name) {
+        Some(v) => v
+            .parse::<usize>()
+            .map(Some)
+            .map_err(|_| format!("ERR_INVALID_CONFIG_{name}")),
+        None => Ok(None),
+    }
 }
 
-fn resolve_config(cli: Cli, env: EnvVals) -> Config {
+fn resolve_config(cli: Cli, env: EnvVals) -> Result<Config, String> {
     let bind = cli
         .bind
         .or(env.bind)
@@ -75,21 +81,16 @@ fn resolve_config(cli: Cli, env: EnvVals) -> Config {
     let max_body_bytes = cli
         .max_body_bytes
         .or(env.max_body_bytes)
-        .unwrap_or(MAX_BODY_BYTES_CEILING)
-        .min(MAX_BODY_BYTES_CEILING);
+        .unwrap_or(MAX_BODY_BYTES_CEILING);
     let max_queue_depth = cli
         .max_queue_depth
         .or(env.max_queue_depth)
-        .unwrap_or(MAX_QUEUE_DEPTH_CEILING)
-        .min(MAX_QUEUE_DEPTH_CEILING);
-    Config {
+        .unwrap_or(MAX_QUEUE_DEPTH_CEILING);
+    Ok(Config {
         bind,
         port,
-        limits: Limits {
-            max_body_bytes,
-            max_queue_depth,
-        },
-    }
+        limits: Limits::new(max_body_bytes, max_queue_depth)?,
+    })
 }
 
 #[tokio::main]
@@ -106,7 +107,13 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let cfg = resolve_config(cli, env_vals);
+    let cfg = match resolve_config(cli, env_vals) {
+        Ok(v) => v,
+        Err(code) => {
+            tracing::error!("{code}");
+            std::process::exit(1);
+        }
+    };
     let addr: SocketAddr = match format!("{}:{}", cfg.bind, cfg.port).parse() {
         Ok(v) => v,
         Err(_) => {
@@ -159,7 +166,7 @@ mod cli_tests {
             max_queue_depth: Some(9),
         };
         let env = env_vals(Some("0.0.0.0"), Some(8080), Some(1024), Some(1));
-        let cfg = resolve_config(cli, env);
+        let cfg = resolve_config(cli, env).unwrap();
         assert_eq!(cfg.bind, "0.0.0.0");
         assert_eq!(cfg.port, 9000);
         assert_eq!(cfg.limits.max_body_bytes, 4096);
@@ -175,7 +182,7 @@ mod cli_tests {
             max_queue_depth: None,
         };
         let env = env_vals(Some("0.0.0.0"), Some(7070), Some(2048), Some(7));
-        let cfg = resolve_config(cli, env);
+        let cfg = resolve_config(cli, env).unwrap();
         assert_eq!(cfg.bind, "0.0.0.0");
         assert_eq!(cfg.port, 7070);
         assert_eq!(cfg.limits.max_body_bytes, 2048);
@@ -191,7 +198,7 @@ mod cli_tests {
             max_queue_depth: Some(MAX_QUEUE_DEPTH_CEILING * 2),
         };
         let env = env_vals(None, None, None, None);
-        let cfg = resolve_config(cli, env);
+        let cfg = resolve_config(cli, env).unwrap();
         assert_eq!(cfg.limits.max_body_bytes, MAX_BODY_BYTES_CEILING);
         assert_eq!(cfg.limits.max_queue_depth, MAX_QUEUE_DEPTH_CEILING);
     }
@@ -205,7 +212,7 @@ mod cli_tests {
             max_queue_depth: None,
         };
         let env = env_vals(None, None, None, None);
-        let cfg = resolve_config(cli, env);
+        let cfg = resolve_config(cli, env).unwrap();
         assert_eq!(cfg.bind, "127.0.0.1");
     }
 
@@ -218,7 +225,7 @@ mod cli_tests {
             max_queue_depth: None,
         };
         let env = env_vals(None, None, None, None);
-        let cfg = resolve_config(cli, env);
+        let cfg = resolve_config(cli, env).unwrap();
         assert_eq!(cfg.bind, "0.0.0.0");
     }
 
@@ -231,7 +238,7 @@ mod cli_tests {
             max_queue_depth: None,
         };
         let env = env_vals(Some("0.0.0.0"), None, None, None);
-        let cfg = resolve_config(cli, env);
+        let cfg = resolve_config(cli, env).unwrap();
         assert_eq!(cfg.bind, "0.0.0.0");
     }
 
@@ -242,5 +249,45 @@ mod cli_tests {
         let result = env_u16("PORT_INVALID_FOR_TEST");
         std::env::remove_var("PORT_INVALID_FOR_TEST");
         assert_eq!(result.unwrap_err(), "ERR_INVALID_ENV_PORT_INVALID_FOR_TEST");
+    }
+
+    #[test]
+    fn zero_limits_are_rejected() {
+        let env = env_vals(None, None, Some(0), Some(1));
+        let body_err = resolve_config(
+            Cli {
+                bind: None,
+                port: None,
+                max_body_bytes: None,
+                max_queue_depth: None,
+            },
+            env,
+        )
+        .unwrap_err();
+        assert_eq!(body_err, "ERR_INVALID_CONFIG_MAX_BODY_BYTES");
+
+        let env = env_vals(None, None, Some(1), Some(0));
+        let depth_err = resolve_config(
+            Cli {
+                bind: None,
+                port: None,
+                max_body_bytes: None,
+                max_queue_depth: None,
+            },
+            env,
+        )
+        .unwrap_err();
+        assert_eq!(depth_err, "ERR_INVALID_CONFIG_MAX_QUEUE_DEPTH");
+    }
+
+    #[test]
+    fn invalid_size_env_is_rejected() {
+        std::env::set_var("MAX_BODY_BYTES_INVALID_FOR_TEST", "not-a-size");
+        let result = env_usize("MAX_BODY_BYTES_INVALID_FOR_TEST");
+        std::env::remove_var("MAX_BODY_BYTES_INVALID_FOR_TEST");
+        assert_eq!(
+            result.unwrap_err(),
+            "ERR_INVALID_CONFIG_MAX_BODY_BYTES_INVALID_FOR_TEST"
+        );
     }
 }

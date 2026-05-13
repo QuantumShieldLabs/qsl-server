@@ -74,7 +74,7 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
 - Legacy `/v1/push/:channel` and `/v1/pull/:channel?max=N` are retired and must not be reintroduced because they carry route tokens in the request URI.
 - Current `x-msg-id` behavior is not idempotency: each accepted push appends a queue item, even when the same identifier is supplied more than once. Idempotent duplicate handling is a future service semantic decision and requires executable tests before it can be claimed.
 - Current `x-msg-id` logging boundary: accepted message IDs may appear in service logs as non-secret operational metadata; route tokens, auth headers, and payload bytes must not.
-- Current `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` config behavior falls back to defaults when invalid values are supplied and caps values above built-in ceilings. Fail-closed startup for invalid size/depth config is a future hardening decision.
+- Current `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` config behavior defaults only when values are missing, fails startup for non-numeric or zero values, and caps values above built-in ceilings.
 - Retention/TTL: not implemented yet; bounded by queue depth only (follow-on).
 
 ## Deployment notes

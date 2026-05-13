@@ -22,7 +22,7 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 - `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`
 - `MAX_QUEUE_DEPTH` (default 256) → 429 + `ERR_OVERLOADED`
 - Empty body → 400 + `ERR_EMPTY_BODY`
-- Invalid `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` values are currently treated as unset, and values above the built-in ceilings are capped. Fail-closed startup for invalid size/depth config is a future hardening decision, not current behavior.
+- Missing `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` use defaults. Non-numeric or zero values fail startup with deterministic config errors. Values above the built-in ceilings are capped.
 - `RELAY_TOKEN` is optional. When set, canonical push/pull require `Authorization: Bearer <token>` and reject missing or invalid bearer tokens with 401 `ERR_UNAUTHORIZED` before mutating queues. When unset or empty, relay auth is disabled and route-token header checks still apply.
 
 ## Run (local)
