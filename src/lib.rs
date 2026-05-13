@@ -28,22 +28,51 @@ pub struct Limits {
 pub const MAX_BODY_BYTES_CEILING: usize = 1024 * 1024;
 pub const MAX_QUEUE_DEPTH_CEILING: usize = 256;
 
-impl Limits {
-    pub fn from_env() -> Self {
-        let max_body_bytes = std::env::var("MAX_BODY_BYTES")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(MAX_BODY_BYTES_CEILING)
-            .min(MAX_BODY_BYTES_CEILING);
-        let max_queue_depth = std::env::var("MAX_QUEUE_DEPTH")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(MAX_QUEUE_DEPTH_CEILING)
-            .min(MAX_QUEUE_DEPTH_CEILING);
+impl Default for Limits {
+    fn default() -> Self {
         Self {
-            max_body_bytes,
-            max_queue_depth,
+            max_body_bytes: MAX_BODY_BYTES_CEILING,
+            max_queue_depth: MAX_QUEUE_DEPTH_CEILING,
         }
+    }
+}
+
+impl Limits {
+    pub fn new(max_body_bytes: usize, max_queue_depth: usize) -> Result<Self, String> {
+        Ok(Self {
+            max_body_bytes: limit_or_error(
+                "MAX_BODY_BYTES",
+                max_body_bytes,
+                MAX_BODY_BYTES_CEILING,
+            )?,
+            max_queue_depth: limit_or_error(
+                "MAX_QUEUE_DEPTH",
+                max_queue_depth,
+                MAX_QUEUE_DEPTH_CEILING,
+            )?,
+        })
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        let max_body_bytes = env_limit_or_default("MAX_BODY_BYTES", MAX_BODY_BYTES_CEILING)?;
+        let max_queue_depth = env_limit_or_default("MAX_QUEUE_DEPTH", MAX_QUEUE_DEPTH_CEILING)?;
+        Self::new(max_body_bytes, max_queue_depth)
+    }
+}
+
+fn limit_or_error(name: &str, value: usize, ceiling: usize) -> Result<usize, String> {
+    if value == 0 {
+        return Err(format!("ERR_INVALID_CONFIG_{name}"));
+    }
+    Ok(value.min(ceiling))
+}
+
+fn env_limit_or_default(name: &str, default: usize) -> Result<usize, String> {
+    match std::env::var(name).ok().filter(|v| !v.trim().is_empty()) {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| format!("ERR_INVALID_CONFIG_{name}")),
+        None => Ok(default),
     }
 }
 

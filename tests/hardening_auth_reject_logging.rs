@@ -3,9 +3,8 @@ use reqwest::StatusCode as ReqStatus;
 use serde::Deserialize;
 use std::{
     io::Write,
-    process::{Command, Stdio},
+    process::Command,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
 };
 use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
@@ -476,7 +475,7 @@ async fn logs_do_not_leak_route_auth_or_payload_on_success_or_rejects() {
 }
 
 #[test]
-fn startup_config_rejects_invalid_port_and_captures_size_depth_fallback() {
+fn startup_config_rejects_invalid_port() {
     let invalid_port = Command::new(env!("CARGO_BIN_EXE_qsl-server"))
         .env_clear()
         .env("RUST_LOG", "error")
@@ -490,28 +489,4 @@ fn startup_config_rejects_invalid_port_and_captures_size_depth_fallback() {
         String::from_utf8_lossy(&invalid_port.stderr)
     );
     assert!(output.contains("ERR_INVALID_ENV_PORT"));
-
-    let mut child = Command::new(env!("CARGO_BIN_EXE_qsl-server"))
-        .env_clear()
-        .env("PORT", "0")
-        .env("MAX_BODY_BYTES", "not-a-size")
-        .env("MAX_QUEUE_DEPTH", "not-a-depth")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap_or_else(|e| panic!("{e}"));
-
-    let deadline = Instant::now() + Duration::from_millis(500);
-    loop {
-        if let Some(status) = child.try_wait().unwrap_or_else(|e| panic!("{e}")) {
-            panic!("invalid size/depth config unexpectedly exited with {status}");
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-
-    child.kill().unwrap_or_else(|e| panic!("{e}"));
-    let _ = child.wait();
 }

@@ -60,8 +60,7 @@ These are required for production deployments. Values below are recommended ceil
 
 ## Configuration parsing boundary
 - `MAX_BODY_BYTES` and `MAX_QUEUE_DEPTH` default to 1 MiB and 256.
-- Current implementation treats invalid `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` values as unset and caps values above the built-in ceilings.
-- Fail-closed startup on invalid size/depth config is a future hardening decision; this document does not claim that behavior is implemented.
+- Current implementation treats missing `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` as defaults, rejects non-numeric or zero values at startup with deterministic config errors, and caps values above the built-in ceilings.
 
 ## Operational checklist (deployment)
 - [ ] TLS termination configured upstream (ALB/Nginx) with HTTPS-only ingress
