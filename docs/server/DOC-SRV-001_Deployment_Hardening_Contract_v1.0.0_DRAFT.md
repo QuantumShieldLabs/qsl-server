@@ -30,6 +30,18 @@ These are required for production deployments. Values below are recommended ceil
   - **Default:** 256
   - **Recommended ceiling:** 256 (do not exceed without review)
   - **Rationale:** prevents unbounded queue growth
+- `MAX_ROUTE_COUNT`
+  - **Default:** 256
+  - **Recommended ceiling:** 256 (do not exceed without review)
+  - **Rationale:** prevents unbounded live route-slot growth
+- `PUSH_RATE_BURST`
+  - **Default:** 256
+  - **Recommended ceiling:** 256 (do not exceed without review)
+  - **Rationale:** bounds local in-app per-route push bursts before `ERR_RATE_LIMITED`
+- `PUSH_RATE_REFILL_PER_SEC`
+  - **Default:** 256
+  - **Recommended ceiling:** 4096 (do not exceed without review)
+  - **Rationale:** bounds local in-app per-route push token refill; `0` is allowed to disable refill
 - `PORT`
   - **Default:** 8080
   - **Allowed range:** 1024–65535 (avoid 80/443 at the app layer if TLS is terminated upstream)
@@ -55,18 +67,24 @@ These are required for production deployments. Values below are recommended ceil
 - **Compensating controls required:**
   - strict network ACLs (Security Group rules)
   - enforced size/queue limits
-  - optional upstream rate limiting
+  - local in-app route/rate caps
+  - upstream reverse-proxy or edge rate limiting
 - **Future auth hardening:** any stronger auth or authorization semantics must be introduced in a separate NA with explicit threat model and executable no-mutation tests.
 
 ## Configuration parsing boundary
-- `MAX_BODY_BYTES` and `MAX_QUEUE_DEPTH` default to 1 MiB and 256.
-- Current implementation treats missing `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` as defaults, rejects non-numeric or zero values at startup with deterministic config errors, and caps values above the built-in ceilings.
+- `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, `PUSH_RATE_BURST`, and `PUSH_RATE_REFILL_PER_SEC` have deterministic defaults.
+- Current implementation treats missing values as defaults, rejects non-numeric values at startup with deterministic config errors, rejects zero for `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, and `PUSH_RATE_BURST`, allows `PUSH_RATE_REFILL_PER_SEC=0` for deterministic no-refill operation, and caps values above the built-in ceilings.
+- Unknown pulls return 204 without creating route slots. Accepted pushes create live route slots only when `MAX_ROUTE_COUNT` allows, and draining a route to empty removes the slot.
+- Local in-app route/rate caps are not a substitute for deployment-layer proxy, firewall, and edge controls.
 
 ## Operational checklist (deployment)
 - [ ] TLS termination configured upstream (ALB/Nginx) with HTTPS-only ingress
 - [ ] Security group/firewall restricts inbound traffic to approved sources
 - [ ] `MAX_BODY_BYTES` set explicitly (≤ 1 MiB unless exception approved)
 - [ ] `MAX_QUEUE_DEPTH` set explicitly (≤ 256 unless exception approved)
+- [ ] `MAX_ROUTE_COUNT` set explicitly (≤ 256 unless exception approved)
+- [ ] `PUSH_RATE_BURST` set explicitly (≤ 256 unless exception approved)
+- [ ] `PUSH_RATE_REFILL_PER_SEC` set explicitly (≤ 4096 unless exception approved; 0 allowed only when no-refill behavior is intended)
 - [ ] Health checks configured (HTTP 200/204 behavior documented)
 - [ ] Logs reviewed to ensure no payload/secret leakage
 - [ ] Systemd hardening plan applied per DOC-SRV-002 (implementation NA)
@@ -87,6 +105,9 @@ Use this checklist when applying NA-0002 changes:
 - [ ] Set explicit environment values in the unit:
   - MAX_BODY_BYTES (<= 1 MiB recommended ceiling)
   - MAX_QUEUE_DEPTH (<= 256 recommended ceiling)
+  - MAX_ROUTE_COUNT (<= 256 recommended ceiling)
+  - PUSH_RATE_BURST (<= 256 recommended ceiling)
+  - PUSH_RATE_REFILL_PER_SEC (<= 4096 recommended ceiling)
   - PORT (default 8080; avoid 80/443 at app layer)
 - [ ] Verify service health with the repo verify script (if available).
 - [ ] Confirm logs contain no payload bytes or secrets (grep guard).

@@ -1,4 +1,7 @@
-use qsl_server::{app, AppState, Limits, MAX_BODY_BYTES_CEILING, MAX_QUEUE_DEPTH_CEILING};
+use qsl_server::{
+    app, AppState, Limits, ResourceControls, MAX_BODY_BYTES_CEILING, MAX_PUSH_RATE_BURST_CEILING,
+    MAX_PUSH_RATE_REFILL_PER_SEC_CEILING, MAX_QUEUE_DEPTH_CEILING, MAX_ROUTE_COUNT_CEILING,
+};
 use reqwest::StatusCode as ReqStatus;
 use serde::Deserialize;
 use std::{
@@ -141,6 +144,13 @@ fn missing_size_depth_config_uses_safe_defaults() {
     let defaults = Limits::default();
     assert_eq!(defaults.max_body_bytes, MAX_BODY_BYTES_CEILING);
     assert_eq!(defaults.max_queue_depth, MAX_QUEUE_DEPTH_CEILING);
+    let controls = ResourceControls::default();
+    assert_eq!(controls.max_route_count, MAX_ROUTE_COUNT_CEILING);
+    assert_eq!(controls.push_rate_burst, MAX_PUSH_RATE_BURST_CEILING);
+    assert_eq!(
+        controls.push_rate_refill_per_sec,
+        MAX_PUSH_RATE_BURST_CEILING
+    );
 }
 
 #[test]
@@ -161,19 +171,58 @@ fn malformed_or_zero_size_depth_config_fails_closed() {
         &[("PORT", "0"), ("MAX_QUEUE_DEPTH", "0")],
         "ERR_INVALID_CONFIG_MAX_QUEUE_DEPTH",
     );
+    assert_config_failure(
+        &[("PORT", "0"), ("MAX_ROUTE_COUNT", "not-a-route-count")],
+        "ERR_INVALID_CONFIG_MAX_ROUTE_COUNT",
+    );
+    assert_config_failure(
+        &[("PORT", "0"), ("MAX_ROUTE_COUNT", "0")],
+        "ERR_INVALID_CONFIG_MAX_ROUTE_COUNT",
+    );
+    assert_config_failure(
+        &[("PORT", "0"), ("PUSH_RATE_BURST", "not-a-burst")],
+        "ERR_INVALID_CONFIG_PUSH_RATE_BURST",
+    );
+    assert_config_failure(
+        &[("PORT", "0"), ("PUSH_RATE_BURST", "0")],
+        "ERR_INVALID_CONFIG_PUSH_RATE_BURST",
+    );
+    assert_config_failure(
+        &[("PORT", "0"), ("PUSH_RATE_REFILL_PER_SEC", "not-a-refill")],
+        "ERR_INVALID_CONFIG_PUSH_RATE_REFILL_PER_SEC",
+    );
+    assert_config_stays_running(&[("PUSH_RATE_REFILL_PER_SEC", "0")]);
 }
 
 #[test]
 fn above_ceiling_size_depth_config_is_capped_explicitly() {
     let body_above_ceiling = (MAX_BODY_BYTES_CEILING + 1).to_string();
     let depth_above_ceiling = (MAX_QUEUE_DEPTH_CEILING + 1).to_string();
+    let route_above_ceiling = (MAX_ROUTE_COUNT_CEILING + 1).to_string();
+    let burst_above_ceiling = (MAX_PUSH_RATE_BURST_CEILING + 1).to_string();
+    let refill_above_ceiling = (MAX_PUSH_RATE_REFILL_PER_SEC_CEILING + 1).to_string();
     assert_config_stays_running(&[
         ("MAX_BODY_BYTES", body_above_ceiling.as_str()),
         ("MAX_QUEUE_DEPTH", depth_above_ceiling.as_str()),
+        ("MAX_ROUTE_COUNT", route_above_ceiling.as_str()),
+        ("PUSH_RATE_BURST", burst_above_ceiling.as_str()),
+        ("PUSH_RATE_REFILL_PER_SEC", refill_above_ceiling.as_str()),
     ]);
     let limits = Limits::new(MAX_BODY_BYTES_CEILING + 1, MAX_QUEUE_DEPTH_CEILING + 1).unwrap();
+    let controls = ResourceControls::new(
+        MAX_ROUTE_COUNT_CEILING + 1,
+        MAX_PUSH_RATE_BURST_CEILING + 1,
+        MAX_PUSH_RATE_REFILL_PER_SEC_CEILING + 1,
+    )
+    .unwrap();
     assert_eq!(limits.max_body_bytes, MAX_BODY_BYTES_CEILING);
     assert_eq!(limits.max_queue_depth, MAX_QUEUE_DEPTH_CEILING);
+    assert_eq!(controls.max_route_count, MAX_ROUTE_COUNT_CEILING);
+    assert_eq!(controls.push_rate_burst, MAX_PUSH_RATE_BURST_CEILING);
+    assert_eq!(
+        controls.push_rate_refill_per_sec,
+        MAX_PUSH_RATE_REFILL_PER_SEC_CEILING
+    );
 }
 
 #[test]

@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tracing::info;
 use uuid::Uuid;
@@ -17,7 +18,65 @@ use uuid::Uuid;
 // Named aliases to keep queue types readable (also satisfies clippy::type_complexity).
 type QueueMsg = (String, Vec<u8>);
 type Queue = VecDeque<QueueMsg>;
-type Queues = HashMap<String, Queue>;
+type Routes = HashMap<String, RouteState>;
+
+#[derive(Debug)]
+struct RouteState {
+    queue: Queue,
+    push_rate: PushRateBucket,
+}
+
+impl RouteState {
+    fn new(now: Instant, controls: ResourceControls) -> Self {
+        Self {
+            queue: Queue::new(),
+            push_rate: PushRateBucket::new(now, controls),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PushRateBucket {
+    tokens: usize,
+    last_refill: Instant,
+}
+
+impl PushRateBucket {
+    fn new(now: Instant, controls: ResourceControls) -> Self {
+        Self {
+            tokens: controls.push_rate_burst,
+            last_refill: now,
+        }
+    }
+
+    fn try_consume(&mut self, controls: ResourceControls, now: Instant) -> bool {
+        self.refill(controls, now);
+        if self.tokens == 0 {
+            return false;
+        }
+        self.tokens -= 1;
+        true
+    }
+
+    fn refill(&mut self, controls: ResourceControls, now: Instant) {
+        if controls.push_rate_refill_per_sec == 0 || self.tokens >= controls.push_rate_burst {
+            return;
+        }
+        let elapsed_secs = now
+            .checked_duration_since(self.last_refill)
+            .unwrap_or(Duration::ZERO)
+            .as_secs() as usize;
+        if elapsed_secs == 0 {
+            return;
+        }
+        let refill = elapsed_secs.saturating_mul(controls.push_rate_refill_per_sec);
+        self.tokens = self
+            .tokens
+            .saturating_add(refill)
+            .min(controls.push_rate_burst);
+        self.last_refill = now;
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
@@ -27,6 +86,9 @@ pub struct Limits {
 
 pub const MAX_BODY_BYTES_CEILING: usize = 1024 * 1024;
 pub const MAX_QUEUE_DEPTH_CEILING: usize = 256;
+pub const MAX_ROUTE_COUNT_CEILING: usize = 256;
+pub const MAX_PUSH_RATE_BURST_CEILING: usize = 256;
+pub const MAX_PUSH_RATE_REFILL_PER_SEC_CEILING: usize = 4096;
 
 impl Default for Limits {
     fn default() -> Self {
@@ -60,6 +122,53 @@ impl Limits {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ResourceControls {
+    pub max_route_count: usize,
+    pub push_rate_burst: usize,
+    pub push_rate_refill_per_sec: usize,
+}
+
+impl Default for ResourceControls {
+    fn default() -> Self {
+        Self {
+            max_route_count: MAX_ROUTE_COUNT_CEILING,
+            push_rate_burst: MAX_PUSH_RATE_BURST_CEILING,
+            push_rate_refill_per_sec: MAX_PUSH_RATE_BURST_CEILING,
+        }
+    }
+}
+
+impl ResourceControls {
+    pub fn new(
+        max_route_count: usize,
+        push_rate_burst: usize,
+        push_rate_refill_per_sec: usize,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            max_route_count: limit_or_error(
+                "MAX_ROUTE_COUNT",
+                max_route_count,
+                MAX_ROUTE_COUNT_CEILING,
+            )?,
+            push_rate_burst: limit_or_error(
+                "PUSH_RATE_BURST",
+                push_rate_burst,
+                MAX_PUSH_RATE_BURST_CEILING,
+            )?,
+            push_rate_refill_per_sec: push_rate_refill_or_cap(push_rate_refill_per_sec),
+        })
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        let max_route_count = env_limit_or_default("MAX_ROUTE_COUNT", MAX_ROUTE_COUNT_CEILING)?;
+        let push_rate_burst = env_limit_or_default("PUSH_RATE_BURST", MAX_PUSH_RATE_BURST_CEILING)?;
+        let push_rate_refill_per_sec =
+            env_refill_or_default("PUSH_RATE_REFILL_PER_SEC", MAX_PUSH_RATE_BURST_CEILING)?;
+        Self::new(max_route_count, push_rate_burst, push_rate_refill_per_sec)
+    }
+}
+
 fn limit_or_error(name: &str, value: usize, ceiling: usize) -> Result<usize, String> {
     if value == 0 {
         return Err(format!("ERR_INVALID_CONFIG_{name}"));
@@ -76,12 +185,27 @@ fn env_limit_or_default(name: &str, default: usize) -> Result<usize, String> {
     }
 }
 
+fn env_refill_or_default(name: &str, default: usize) -> Result<usize, String> {
+    match std::env::var(name).ok().filter(|v| !v.trim().is_empty()) {
+        Some(value) => value
+            .parse::<usize>()
+            .map(push_rate_refill_or_cap)
+            .map_err(|_| format!("ERR_INVALID_CONFIG_{name}")),
+        None => Ok(default),
+    }
+}
+
+fn push_rate_refill_or_cap(value: usize) -> usize {
+    value.min(MAX_PUSH_RATE_REFILL_PER_SEC_CEILING)
+}
+
 #[derive(Clone)]
 pub struct AppState {
-    // channel -> queue of (msg_id, bytes)
-    queues: Arc<Mutex<Queues>>,
+    // route token -> route state containing queued messages and bounded rate accounting
+    routes: Arc<Mutex<Routes>>,
 
     limits: Limits,
+    controls: ResourceControls,
     relay_token: Option<String>,
 }
 
@@ -94,9 +218,26 @@ impl AppState {
     }
 
     pub fn new_with_auth(limits: Limits, relay_token: Option<String>) -> Self {
-        Self {
-            queues: Arc::new(Mutex::new(HashMap::new())),
+        Self::new_with_auth_and_controls(limits, ResourceControls::default(), relay_token)
+    }
+
+    pub fn new_with_controls(limits: Limits, controls: ResourceControls) -> Self {
+        Self::new_with_auth_and_controls(
             limits,
+            controls,
+            std::env::var("RELAY_TOKEN").ok().filter(|v| !v.is_empty()),
+        )
+    }
+
+    pub fn new_with_auth_and_controls(
+        limits: Limits,
+        controls: ResourceControls,
+        relay_token: Option<String>,
+    ) -> Self {
+        Self {
+            routes: Arc::new(Mutex::new(HashMap::new())),
+            limits,
+            controls,
             relay_token,
         }
     }
@@ -196,19 +337,53 @@ async fn push_message(
         .filter(|v| !v.trim().is_empty())
         .map(|v| v.to_string())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let Ok(mut g) = st.queues.lock() else {
+    let Ok(mut g) = st.routes.lock() else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "ERR_LOCK_POISON").into_response();
     };
-    let q = g.entry(channel.clone()).or_default();
-    if q.len() >= st.limits.max_queue_depth {
-        info!(
-            "event=overloaded queue_depth={} max={}",
-            q.len(),
-            st.limits.max_queue_depth
-        );
-        return (StatusCode::TOO_MANY_REQUESTS, "ERR_OVERLOADED").into_response();
+
+    let now = Instant::now();
+    if let Some(route) = g.get_mut(&channel) {
+        if route.queue.len() >= st.limits.max_queue_depth {
+            info!(
+                "event=overloaded queue_depth={} max={}",
+                route.queue.len(),
+                st.limits.max_queue_depth
+            );
+            return (StatusCode::TOO_MANY_REQUESTS, "ERR_OVERLOADED").into_response();
+        }
+        if !route.push_rate.try_consume(st.controls, now) {
+            info!(
+                "event=rate_limited channel_id={} burst={} refill_per_sec={}",
+                channel_log_id(&channel),
+                st.controls.push_rate_burst,
+                st.controls.push_rate_refill_per_sec
+            );
+            return (StatusCode::TOO_MANY_REQUESTS, "ERR_RATE_LIMITED").into_response();
+        }
+        route.queue.push_back((msg_id.clone(), body.to_vec()));
+    } else {
+        if g.len() >= st.controls.max_route_count {
+            info!(
+                "event=route_cap channel_id={} live_routes={} max={}",
+                channel_log_id(&channel),
+                g.len(),
+                st.controls.max_route_count
+            );
+            return (StatusCode::TOO_MANY_REQUESTS, "ERR_ROUTE_CAP").into_response();
+        }
+        let mut route = RouteState::new(now, st.controls);
+        if !route.push_rate.try_consume(st.controls, now) {
+            info!(
+                "event=rate_limited channel_id={} burst={} refill_per_sec={}",
+                channel_log_id(&channel),
+                st.controls.push_rate_burst,
+                st.controls.push_rate_refill_per_sec
+            );
+            return (StatusCode::TOO_MANY_REQUESTS, "ERR_RATE_LIMITED").into_response();
+        }
+        route.queue.push_back((msg_id.clone(), body.to_vec()));
+        g.insert(channel.clone(), route);
     }
-    q.push_back((msg_id.clone(), body.to_vec()));
 
     // Never log payload; metadata only.
     info!(
@@ -238,16 +413,19 @@ async fn pull_message(
         return (StatusCode::BAD_REQUEST, "ERR_BAD_MAX").into_response();
     }
     let max = max.min(st.limits.max_queue_depth);
-    let Ok(mut g) = st.queues.lock() else {
+    let Ok(mut g) = st.routes.lock() else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "ERR_LOCK_POISON").into_response();
     };
-    let q = g.entry(channel.clone()).or_default();
-    if q.is_empty() {
+    let Some(route) = g.get_mut(&channel) else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+    if route.queue.is_empty() {
+        g.remove(&channel);
         return StatusCode::NO_CONTENT.into_response();
     }
     let mut items = Vec::with_capacity(max);
     for _ in 0..max {
-        if let Some((msg_id, data)) = q.pop_front() {
+        if let Some((msg_id, data)) = route.queue.pop_front() {
             info!(
                 "pull channel_id={} id={} bytes={}",
                 channel_log_id(&channel),
@@ -258,6 +436,9 @@ async fn pull_message(
         } else {
             break;
         }
+    }
+    if g.get(&channel).is_some_and(|route| route.queue.is_empty()) {
+        g.remove(&channel);
     }
     (StatusCode::OK, Json(PullResp { items })).into_response()
 }

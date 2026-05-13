@@ -32,12 +32,16 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
 ## Limits (hard, deterministic)
 - MAX_BODY_BYTES: server-enforced ceiling per message (document current value; recommend 1 MiB unless otherwise configured).
 - MAX_QUEUE_DEPTH: bounded queue per channel (document current value; recommend 256 unless otherwise configured).
+- MAX_ROUTE_COUNT: bounded live route slots. Accepted pushes to new routes create slots only when the cap allows; unknown pulls do not create slots.
+- PUSH_RATE_BURST / PUSH_RATE_REFILL_PER_SEC: local in-app per-route push token bucket. A refill of 0 is allowed for deterministic no-refill operation.
 - Overflow behavior:
   - Reject new PUSH deterministically when queue is full.
+  - Reject new-route PUSH deterministically with `ERR_ROUTE_CAP` when the global live route cap is full.
+  - Reject PUSH deterministically with `ERR_RATE_LIMITED` when the route's local token bucket has no available tokens.
 
 ## Retention / TTL
 - Retention is bounded (time-based TTL or size-based eviction).
-- Default behavior is deterministic and documented (e.g., TTL=24h).
+- Current default behavior is deterministic delete-on-empty: pull delivery removes queued messages, and draining a route to empty removes the live route slot.
 
 ## Authentication (explicit)
 - Optional bearer token auth (if enabled). If disabled, document that access is protected by network controls.
@@ -66,6 +70,8 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
   - Rejects:
     - missing/empty route-token header → 400 `ERR_MISSING_ROUTE_TOKEN`
     - oversize → 413 `ERR_TOO_LARGE`
+    - rate limited → 429 `ERR_RATE_LIMITED`
+    - global route cap full for a new route → 429 `ERR_ROUTE_CAP`
     - queue full → 429 `ERR_OVERLOADED`
 - Canonical endpoint: `GET /v1/pull?max=N`
   - Required header: `x-qsl-route-token`
@@ -74,9 +80,9 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
 - Legacy `/v1/push/:channel` and `/v1/pull/:channel?max=N` are retired and must not be reintroduced because they carry route tokens in the request URI.
 - Current `x-msg-id` behavior is not idempotency: each accepted push appends a queue item, even when the same identifier is supplied more than once. Idempotent duplicate handling is a future service semantic decision and requires executable tests before it can be claimed.
 - Current `x-msg-id` logging boundary: accepted message IDs may appear in service logs as non-secret operational metadata; route tokens, auth headers, and payload bytes must not.
-- Current `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` config behavior defaults only when values are missing, fails startup for non-numeric or zero values, and caps values above built-in ceilings.
-- No in-app rate limiting is implemented. No global route-count cap is implemented. Deployments needing those controls must use upstream controls or a future test-backed qsl-server lane.
-- Retention/TTL: not implemented yet; bounded by queue depth only (follow-on).
+- Current limit config behavior defaults only when values are missing, fails startup for non-numeric values, rejects zero for body, queue-depth, route-count, and burst limits, allows `PUSH_RATE_REFILL_PER_SEC=0`, and caps values above built-in ceilings.
+- Local in-app rate limiting and global route-count caps are implemented as bounded memory-only controls. They do not replace reverse proxy, firewall, edge rate limiting, or deployment-layer operational controls.
+- Retention/TTL: current route-slot lifecycle is delete-on-empty after pull drain. Time-based TTL remains follow-on work.
 
 ## Deployment notes
 - TLS termination must be explicit (typically at ALB/Nginx/Caddy).
