@@ -242,13 +242,14 @@ async fn body_and_auth_rejects_under_pressure_do_not_mutate() {
 }
 
 #[test]
-fn rate_limit_and_global_route_cap_are_explicit_future_gaps_not_claimed() {
+fn rate_limit_and_global_route_cap_are_implemented_as_local_in_app_controls() {
     let readme = include_str!("../README.md");
     let inbox_contract =
         include_str!("../docs/server/DOC-SRV-003_Relay_Inbox_Contract_v1.0.0_DRAFT.md");
 
     for doc in [readme, inbox_contract] {
-        assert!(doc.contains("No in-app rate limiting is implemented"));
-        assert!(doc.contains("No global route-count cap is implemented"));
+        assert!(doc.contains("ERR_RATE_LIMITED"));
+        assert!(doc.contains("ERR_ROUTE_CAP"));
+        assert!(doc.contains("local in-app"));
     }
 }

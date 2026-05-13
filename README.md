@@ -21,10 +21,13 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 ## Behavior and limits
 - `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`
 - `MAX_QUEUE_DEPTH` (default 256) → 429 + `ERR_OVERLOADED`
+- `MAX_ROUTE_COUNT` (default 256) caps live route slots. Accepted pushes to new routes create slots only when the cap allows; new-route pushes beyond the cap return 429 + `ERR_ROUTE_CAP`.
+- `PUSH_RATE_BURST` (default 256) and `PUSH_RATE_REFILL_PER_SEC` (default 256, `0` allowed to disable refill) provide a local in-app per-route push token bucket. Pushes beyond available tokens return 429 + `ERR_RATE_LIMITED`.
 - Empty body → 400 + `ERR_EMPTY_BODY`
-- Missing `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` use defaults. Non-numeric or zero values fail startup with deterministic config errors. Values above the built-in ceilings are capped.
+- Missing limit values use defaults. Non-numeric values fail startup with deterministic config errors. Zero values fail startup for `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, and `PUSH_RATE_BURST`; `PUSH_RATE_REFILL_PER_SEC=0` is allowed for deterministic no-refill operation. Values above the built-in ceilings are capped.
 - `RELAY_TOKEN` is optional. When set, canonical push/pull require `Authorization: Bearer <token>` and reject missing or invalid bearer tokens with 401 `ERR_UNAUTHORIZED` before mutating queues. When unset or empty, relay auth is disabled and route-token header checks still apply.
-- No in-app rate limiting is implemented. No global route-count cap is implemented. Deployments needing those controls must use upstream controls or a future test-backed qsl-server lane.
+- Unknown pulls return 204 without creating route slots. Draining a route to empty removes the live slot, releasing global route capacity.
+- Rate and global route-cap controls are minimal local in-app hardening primitives. They do not approve production deployment, and reverse proxy / edge rate limiting remains a separate deployment layer.
 
 ## Run (local)
 ```bash
@@ -35,12 +38,17 @@ cargo run
 CLI overrides env, env overrides defaults:
 
 ```bash
-qsl-server --bind 0.0.0.0 --port 8080 --max-body-bytes 1048576 --max-queue-depth 256
+qsl-server --bind 0.0.0.0 --port 8080 --max-body-bytes 1048576 --max-queue-depth 256 --max-route-count 256 --push-rate-burst 256 --push-rate-refill-per-sec 256
 ```
 
 Environment defaults:
 - `BIND_ADDR=127.0.0.1` (safe default, explicit opt-in needed for public bind)
 - `PORT=8080`
+- `MAX_BODY_BYTES=1048576`
+- `MAX_QUEUE_DEPTH=256`
+- `MAX_ROUTE_COUNT=256`
+- `PUSH_RATE_BURST=256`
+- `PUSH_RATE_REFILL_PER_SEC=256`
 
 ## Remote deployment (Ubuntu 24.04 + systemd)
 
