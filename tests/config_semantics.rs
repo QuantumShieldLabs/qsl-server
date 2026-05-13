@@ -1,6 +1,7 @@
 use qsl_server::{
     app, AppState, Limits, ResourceControls, MAX_BODY_BYTES_CEILING, MAX_PUSH_RATE_BURST_CEILING,
     MAX_PUSH_RATE_REFILL_PER_SEC_CEILING, MAX_QUEUE_DEPTH_CEILING, MAX_ROUTE_COUNT_CEILING,
+    MAX_ROUTE_IDLE_TTL_MS_CEILING, ROUTE_IDLE_TTL_MS_DEFAULT,
 };
 use reqwest::StatusCode as ReqStatus;
 use serde::Deserialize;
@@ -151,6 +152,10 @@ fn missing_size_depth_config_uses_safe_defaults() {
         controls.push_rate_refill_per_sec,
         MAX_PUSH_RATE_BURST_CEILING
     );
+    assert_eq!(
+        controls.route_idle_ttl.as_millis(),
+        ROUTE_IDLE_TTL_MS_DEFAULT as u128
+    );
 }
 
 #[test]
@@ -192,6 +197,14 @@ fn malformed_or_zero_size_depth_config_fails_closed() {
         "ERR_INVALID_CONFIG_PUSH_RATE_REFILL_PER_SEC",
     );
     assert_config_stays_running(&[("PUSH_RATE_REFILL_PER_SEC", "0")]);
+    assert_config_failure(
+        &[("PORT", "0"), ("ROUTE_IDLE_TTL_MS", "not-a-ttl")],
+        "ERR_INVALID_CONFIG_ROUTE_IDLE_TTL_MS",
+    );
+    assert_config_failure(
+        &[("PORT", "0"), ("ROUTE_IDLE_TTL_MS", "0")],
+        "ERR_INVALID_CONFIG_ROUTE_IDLE_TTL_MS",
+    );
 }
 
 #[test]
@@ -201,18 +214,21 @@ fn above_ceiling_size_depth_config_is_capped_explicitly() {
     let route_above_ceiling = (MAX_ROUTE_COUNT_CEILING + 1).to_string();
     let burst_above_ceiling = (MAX_PUSH_RATE_BURST_CEILING + 1).to_string();
     let refill_above_ceiling = (MAX_PUSH_RATE_REFILL_PER_SEC_CEILING + 1).to_string();
+    let ttl_above_ceiling = (MAX_ROUTE_IDLE_TTL_MS_CEILING + 1).to_string();
     assert_config_stays_running(&[
         ("MAX_BODY_BYTES", body_above_ceiling.as_str()),
         ("MAX_QUEUE_DEPTH", depth_above_ceiling.as_str()),
         ("MAX_ROUTE_COUNT", route_above_ceiling.as_str()),
         ("PUSH_RATE_BURST", burst_above_ceiling.as_str()),
         ("PUSH_RATE_REFILL_PER_SEC", refill_above_ceiling.as_str()),
+        ("ROUTE_IDLE_TTL_MS", ttl_above_ceiling.as_str()),
     ]);
     let limits = Limits::new(MAX_BODY_BYTES_CEILING + 1, MAX_QUEUE_DEPTH_CEILING + 1).unwrap();
-    let controls = ResourceControls::new(
+    let controls = ResourceControls::new_with_route_idle_ttl_ms(
         MAX_ROUTE_COUNT_CEILING + 1,
         MAX_PUSH_RATE_BURST_CEILING + 1,
         MAX_PUSH_RATE_REFILL_PER_SEC_CEILING + 1,
+        MAX_ROUTE_IDLE_TTL_MS_CEILING + 1,
     )
     .unwrap();
     assert_eq!(limits.max_body_bytes, MAX_BODY_BYTES_CEILING);
@@ -222,6 +238,10 @@ fn above_ceiling_size_depth_config_is_capped_explicitly() {
     assert_eq!(
         controls.push_rate_refill_per_sec,
         MAX_PUSH_RATE_REFILL_PER_SEC_CEILING
+    );
+    assert_eq!(
+        controls.route_idle_ttl.as_millis(),
+        MAX_ROUTE_IDLE_TTL_MS_CEILING as u128
     );
 }
 

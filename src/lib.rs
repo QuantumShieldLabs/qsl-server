@@ -24,6 +24,7 @@ type Routes = HashMap<String, RouteState>;
 struct RouteState {
     queue: Queue,
     push_rate: PushRateBucket,
+    last_touched: Instant,
 }
 
 impl RouteState {
@@ -31,7 +32,18 @@ impl RouteState {
         Self {
             queue: Queue::new(),
             push_rate: PushRateBucket::new(now, controls),
+            last_touched: now,
         }
+    }
+
+    fn touch(&mut self, now: Instant) {
+        self.last_touched = now;
+    }
+
+    fn is_expired(&self, controls: ResourceControls, now: Instant) -> bool {
+        now.checked_duration_since(self.last_touched)
+            .unwrap_or(Duration::ZERO)
+            >= controls.route_idle_ttl
     }
 }
 
@@ -89,6 +101,8 @@ pub const MAX_QUEUE_DEPTH_CEILING: usize = 256;
 pub const MAX_ROUTE_COUNT_CEILING: usize = 256;
 pub const MAX_PUSH_RATE_BURST_CEILING: usize = 256;
 pub const MAX_PUSH_RATE_REFILL_PER_SEC_CEILING: usize = 4096;
+pub const ROUTE_IDLE_TTL_MS_DEFAULT: usize = 300_000;
+pub const MAX_ROUTE_IDLE_TTL_MS_CEILING: usize = 86_400_000;
 
 impl Default for Limits {
     fn default() -> Self {
@@ -127,6 +141,7 @@ pub struct ResourceControls {
     pub max_route_count: usize,
     pub push_rate_burst: usize,
     pub push_rate_refill_per_sec: usize,
+    pub route_idle_ttl: Duration,
 }
 
 impl Default for ResourceControls {
@@ -135,6 +150,7 @@ impl Default for ResourceControls {
             max_route_count: MAX_ROUTE_COUNT_CEILING,
             push_rate_burst: MAX_PUSH_RATE_BURST_CEILING,
             push_rate_refill_per_sec: MAX_PUSH_RATE_BURST_CEILING,
+            route_idle_ttl: Duration::from_millis(ROUTE_IDLE_TTL_MS_DEFAULT as u64),
         }
     }
 }
@@ -144,6 +160,20 @@ impl ResourceControls {
         max_route_count: usize,
         push_rate_burst: usize,
         push_rate_refill_per_sec: usize,
+    ) -> Result<Self, String> {
+        Self::new_with_route_idle_ttl_ms(
+            max_route_count,
+            push_rate_burst,
+            push_rate_refill_per_sec,
+            ROUTE_IDLE_TTL_MS_DEFAULT,
+        )
+    }
+
+    pub fn new_with_route_idle_ttl_ms(
+        max_route_count: usize,
+        push_rate_burst: usize,
+        push_rate_refill_per_sec: usize,
+        route_idle_ttl_ms: usize,
     ) -> Result<Self, String> {
         Ok(Self {
             max_route_count: limit_or_error(
@@ -157,6 +187,11 @@ impl ResourceControls {
                 MAX_PUSH_RATE_BURST_CEILING,
             )?,
             push_rate_refill_per_sec: push_rate_refill_or_cap(push_rate_refill_per_sec),
+            route_idle_ttl: Duration::from_millis(limit_or_error(
+                "ROUTE_IDLE_TTL_MS",
+                route_idle_ttl_ms,
+                MAX_ROUTE_IDLE_TTL_MS_CEILING,
+            )? as u64),
         })
     }
 
@@ -165,7 +200,14 @@ impl ResourceControls {
         let push_rate_burst = env_limit_or_default("PUSH_RATE_BURST", MAX_PUSH_RATE_BURST_CEILING)?;
         let push_rate_refill_per_sec =
             env_refill_or_default("PUSH_RATE_REFILL_PER_SEC", MAX_PUSH_RATE_BURST_CEILING)?;
-        Self::new(max_route_count, push_rate_burst, push_rate_refill_per_sec)
+        let route_idle_ttl_ms =
+            env_limit_or_default("ROUTE_IDLE_TTL_MS", ROUTE_IDLE_TTL_MS_DEFAULT)?;
+        Self::new_with_route_idle_ttl_ms(
+            max_route_count,
+            push_rate_burst,
+            push_rate_refill_per_sec,
+            route_idle_ttl_ms,
+        )
     }
 }
 
@@ -312,6 +354,26 @@ fn resolve_route_token(headers: &HeaderMap) -> Result<String, &'static str> {
     }
 }
 
+fn expire_idle_routes(routes: &mut Routes, controls: ResourceControls, now: Instant) {
+    let mut expired = Vec::new();
+    routes.retain(|channel, route| {
+        if route.is_expired(controls, now) {
+            expired.push((channel_log_id(channel), route.queue.len()));
+            false
+        } else {
+            true
+        }
+    });
+    for (channel_id, queued_messages) in expired {
+        info!(
+            "event=route_expired channel_id={} queued_messages={} ttl_ms={}",
+            channel_id,
+            queued_messages,
+            controls.route_idle_ttl.as_millis()
+        );
+    }
+}
+
 async fn push_message(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -342,6 +404,7 @@ async fn push_message(
     };
 
     let now = Instant::now();
+    expire_idle_routes(&mut g, st.controls, now);
     if let Some(route) = g.get_mut(&channel) {
         if route.queue.len() >= st.limits.max_queue_depth {
             info!(
@@ -361,6 +424,7 @@ async fn push_message(
             return (StatusCode::TOO_MANY_REQUESTS, "ERR_RATE_LIMITED").into_response();
         }
         route.queue.push_back((msg_id.clone(), body.to_vec()));
+        route.touch(now);
     } else {
         if g.len() >= st.controls.max_route_count {
             info!(
@@ -382,6 +446,7 @@ async fn push_message(
             return (StatusCode::TOO_MANY_REQUESTS, "ERR_RATE_LIMITED").into_response();
         }
         route.queue.push_back((msg_id.clone(), body.to_vec()));
+        route.touch(now);
         g.insert(channel.clone(), route);
     }
 
@@ -416,6 +481,8 @@ async fn pull_message(
     let Ok(mut g) = st.routes.lock() else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "ERR_LOCK_POISON").into_response();
     };
+    let now = Instant::now();
+    expire_idle_routes(&mut g, st.controls, now);
     let Some(route) = g.get_mut(&channel) else {
         return StatusCode::NO_CONTENT.into_response();
     };
@@ -436,6 +503,9 @@ async fn pull_message(
         } else {
             break;
         }
+    }
+    if let Some(route) = g.get_mut(&channel) {
+        route.touch(now);
     }
     if g.get(&channel).is_some_and(|route| route.queue.is_empty()) {
         g.remove(&channel);
