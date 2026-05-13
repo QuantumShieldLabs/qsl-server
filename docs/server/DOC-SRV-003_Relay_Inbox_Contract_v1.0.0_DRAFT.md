@@ -75,6 +75,7 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
 - Current `x-msg-id` behavior is not idempotency: each accepted push appends a queue item, even when the same identifier is supplied more than once. Idempotent duplicate handling is a future service semantic decision and requires executable tests before it can be claimed.
 - Current `x-msg-id` logging boundary: accepted message IDs may appear in service logs as non-secret operational metadata; route tokens, auth headers, and payload bytes must not.
 - Current `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` config behavior defaults only when values are missing, fails startup for non-numeric or zero values, and caps values above built-in ceilings.
+- No in-app rate limiting is implemented. No global route-count cap is implemented. Deployments needing those controls must use upstream controls or a future test-backed qsl-server lane.
 - Retention/TTL: not implemented yet; bounded by queue depth only (follow-on).
 
 ## Deployment notes

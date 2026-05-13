@@ -24,6 +24,7 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 - Empty body → 400 + `ERR_EMPTY_BODY`
 - Missing `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` use defaults. Non-numeric or zero values fail startup with deterministic config errors. Values above the built-in ceilings are capped.
 - `RELAY_TOKEN` is optional. When set, canonical push/pull require `Authorization: Bearer <token>` and reject missing or invalid bearer tokens with 401 `ERR_UNAUTHORIZED` before mutating queues. When unset or empty, relay auth is disabled and route-token header checks still apply.
+- No in-app rate limiting is implemented. No global route-count cap is implemented. Deployments needing those controls must use upstream controls or a future test-backed qsl-server lane.
 
 ## Run (local)
 ```bash
