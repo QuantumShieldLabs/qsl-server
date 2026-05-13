@@ -46,6 +46,7 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
 ## Logging policy
 - No payload logging (ciphertext blobs never logged).
 - Log only minimal metadata: channel_id hash/prefix and message_id hash/prefix if needed for ops.
+- Current implementation logs accepted message IDs as non-secret metadata on push/pull. Clients must not place route tokens, auth material, payload contents, or other secrets in `x-msg-id`.
 
 ## Determinism
 - Rejects are deterministic and stable (same inputs → same error codes).
@@ -72,6 +73,7 @@ Define a minimal, explicit store-and-forward relay inbox contract for ciphertext
   - Returns JSON `{ "items": [ { "id": "<opaque>", "data": [u8...] }, ... ] }`.
 - Legacy `/v1/push/:channel` and `/v1/pull/:channel?max=N` are retired and must not be reintroduced because they carry route tokens in the request URI.
 - Current `x-msg-id` behavior is not idempotency: each accepted push appends a queue item, even when the same identifier is supplied more than once. Idempotent duplicate handling is a future service semantic decision and requires executable tests before it can be claimed.
+- Current `x-msg-id` logging boundary: accepted message IDs may appear in service logs as non-secret operational metadata; route tokens, auth headers, and payload bytes must not.
 - Current `MAX_BODY_BYTES` / `MAX_QUEUE_DEPTH` config behavior falls back to defaults when invalid values are supplied and caps values above built-in ceilings. Fail-closed startup for invalid size/depth config is a future hardening decision.
 - Retention/TTL: not implemented yet; bounded by queue depth only (follow-on).
 

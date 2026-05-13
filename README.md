@@ -15,6 +15,7 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 ## API
 - Canonical push: `POST /v1/push` with `X-QSL-Route-Token: <token>` -> `{ "id": "<msg_id>" }`
 - Canonical pull: `GET /v1/pull?max=N` with `X-QSL-Route-Token: <token>` -> JSON `{ "items": [ { "id": "<msg_id>", "data": [<byte>, ...] }, ... ] }` (200) or 204 if empty
+- Optional `X-Msg-Id` supplies an opaque message identifier. It is not an idempotency key: duplicate values are accepted as separate queued messages. Accepted message IDs are logged as non-secret operational metadata, so clients must not put secrets in this header.
 - Legacy path-token routes are retired. `POST /v1/push/{channel}` and `GET /v1/pull/{channel}?max=N` are no longer supported because they carry the route token in the request URI.
 
 ## Behavior and limits
