@@ -20,16 +20,16 @@ struct Cli {
     /// Max body bytes (env: MAX_BODY_BYTES, default: 1048576)
     #[arg(long)]
     max_body_bytes: Option<usize>,
-    /// Max queue depth (env: MAX_QUEUE_DEPTH, default: 256)
+    /// Max queue depth (env: MAX_QUEUE_DEPTH, default: 257)
     #[arg(long)]
     max_queue_depth: Option<usize>,
     /// Max live routes (env: MAX_ROUTE_COUNT, default: 256)
     #[arg(long)]
     max_route_count: Option<usize>,
-    /// Per-route push burst before rate limiting (env: PUSH_RATE_BURST, default: 256)
+    /// Per-route push burst before rate limiting (env: PUSH_RATE_BURST, default: 257)
     #[arg(long)]
     push_rate_burst: Option<usize>,
-    /// Per-route push token refill per second; 0 disables refill (env: PUSH_RATE_REFILL_PER_SEC, default: 256)
+    /// Per-route push token refill per second; 0 disables refill (env: PUSH_RATE_REFILL_PER_SEC, default: 257)
     #[arg(long)]
     push_rate_refill_per_sec: Option<usize>,
     /// Route idle TTL in milliseconds (env: ROUTE_IDLE_TTL_MS, default: 300000)

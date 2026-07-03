@@ -97,9 +97,9 @@ pub struct Limits {
 }
 
 pub const MAX_BODY_BYTES_CEILING: usize = 1024 * 1024;
-pub const MAX_QUEUE_DEPTH_CEILING: usize = 256;
+pub const MAX_QUEUE_DEPTH_CEILING: usize = 257;
 pub const MAX_ROUTE_COUNT_CEILING: usize = 256;
-pub const MAX_PUSH_RATE_BURST_CEILING: usize = 256;
+pub const MAX_PUSH_RATE_BURST_CEILING: usize = 257;
 pub const MAX_PUSH_RATE_REFILL_PER_SEC_CEILING: usize = 4096;
 pub const ROUTE_IDLE_TTL_MS_DEFAULT: usize = 300_000;
 pub const MAX_ROUTE_IDLE_TTL_MS_CEILING: usize = 86_400_000;
