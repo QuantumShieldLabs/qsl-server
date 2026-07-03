@@ -20,9 +20,9 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 
 ## Behavior and limits
 - `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`
-- `MAX_QUEUE_DEPTH` (default 256) → 429 + `ERR_OVERLOADED`
+- `MAX_QUEUE_DEPTH` (default 257) → 429 + `ERR_OVERLOADED`
 - `MAX_ROUTE_COUNT` (default 256) caps live route slots. Accepted pushes to new routes create slots only when the cap allows; new-route pushes beyond the cap return 429 + `ERR_ROUTE_CAP`.
-- `PUSH_RATE_BURST` (default 256) and `PUSH_RATE_REFILL_PER_SEC` (default 256, `0` allowed to disable refill) provide a local in-app per-route push token bucket. Pushes beyond available tokens return 429 + `ERR_RATE_LIMITED`.
+- `PUSH_RATE_BURST` (default 257) and `PUSH_RATE_REFILL_PER_SEC` (default 257, `0` allowed to disable refill) provide a local in-app per-route push token bucket. Pushes beyond available tokens return 429 + `ERR_RATE_LIMITED`.
 - `ROUTE_IDLE_TTL_MS` (default 300000, capped at 86400000) applies a Time-based idle TTL to route slots. Cleanup runs deterministically on canonical push/pull after auth, route-token, body-size, and pull-`max` validation. Expired routes are removed with queued messages discarded, releasing route capacity and per-route rate accounting before the current accepted request is evaluated.
 - Empty body → 400 + `ERR_EMPTY_BODY`
 - Missing limit values use defaults. Non-numeric values fail startup with deterministic config errors. Zero values fail startup for `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, `PUSH_RATE_BURST`, and `ROUTE_IDLE_TTL_MS`; `PUSH_RATE_REFILL_PER_SEC=0` is allowed for deterministic no-refill operation. Values above the built-in ceilings are capped.
@@ -39,17 +39,17 @@ cargo run
 CLI overrides env, env overrides defaults:
 
 ```bash
-qsl-server --bind 0.0.0.0 --port 8080 --max-body-bytes 1048576 --max-queue-depth 256 --max-route-count 256 --push-rate-burst 256 --push-rate-refill-per-sec 256 --route-idle-ttl-ms 300000
+qsl-server --bind 0.0.0.0 --port 8080 --max-body-bytes 1048576 --max-queue-depth 257 --max-route-count 256 --push-rate-burst 257 --push-rate-refill-per-sec 257 --route-idle-ttl-ms 300000
 ```
 
 Environment defaults:
 - `BIND_ADDR=127.0.0.1` (safe default, explicit opt-in needed for public bind)
 - `PORT=8080`
 - `MAX_BODY_BYTES=1048576`
-- `MAX_QUEUE_DEPTH=256`
+- `MAX_QUEUE_DEPTH=257`
 - `MAX_ROUTE_COUNT=256`
-- `PUSH_RATE_BURST=256`
-- `PUSH_RATE_REFILL_PER_SEC=256`
+- `PUSH_RATE_BURST=257`
+- `PUSH_RATE_REFILL_PER_SEC=257`
 - `ROUTE_IDLE_TTL_MS=300000`
 
 ## Remote deployment (Ubuntu 24.04 + systemd)
