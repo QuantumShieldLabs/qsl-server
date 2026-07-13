@@ -34,7 +34,15 @@ Edit `/etc/qsl-server/relay.env`:
 - `BIND_ADDR=127.0.0.1` (default safe bind)
 - `PORT=8080`
 - `RELAY_TOKEN=` (set a strong token out-of-band; do not commit tokens)
-- `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH` as needed
+- `STORE_PATH=/var/lib/qsl-server/relay.db` (REQUIRED since NA-0642 — the durable
+  SQLite queue; the packaged unit provisions `/var/lib/qsl-server` via
+  `StateDirectory=qsl-server`. This file IS the relay's data backup unit.)
+- `RETENTION_TTL_SECS=604800` (undelivered-message lifetime, default 7 days;
+  replaces the retired `ROUTE_IDLE_TTL_MS` idle discard — a leftover
+  `ROUTE_IDLE_TTL_MS` line is warned about and ignored)
+- `PULL_LEASE_SECS=60` (visibility timeout for acknowledged pulls, `?ack=lease`)
+- `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH` as needed (template default 257 — the
+  NA-0598 exact-4-MiB attachment needs 256 chunks + 1 manifest)
 
 Apply config:
 

@@ -16,6 +16,9 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/qsl-server /etc/qsl-server
+# NA-0642: creates /var/lib/qsl-server (owned by the service user) and keeps
+# it writable under ProtectSystem=strict for the durable STORE_PATH.
+StateDirectory=qsl-server
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

@@ -7,45 +7,26 @@ use axum::{
     Json, Router,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tracing::info;
 use uuid::Uuid;
 
-// Named aliases to keep queue types readable (also satisfies clippy::type_complexity).
-type QueueMsg = (String, Vec<u8>);
-type Queue = VecDeque<QueueMsg>;
-type Routes = HashMap<String, RouteState>;
+mod store;
 
-#[derive(Debug)]
-struct RouteState {
-    queue: Queue,
-    push_rate: PushRateBucket,
-    last_touched: Instant,
-}
+pub use store::{
+    pull_lease_or_error, retention_ttl_or_error, StoreConfig, SweepStats, MAX_ACK_IDS,
+    MAX_PULL_LEASE_SECS_CEILING, MAX_RETENTION_TTL_SECS_CEILING, PULL_LEASE_SECS_DEFAULT,
+    RETENTION_TTL_SECS_DEFAULT,
+};
 
-impl RouteState {
-    fn new(now: Instant, controls: ResourceControls) -> Self {
-        Self {
-            queue: Queue::new(),
-            push_rate: PushRateBucket::new(now, controls),
-            last_touched: now,
-        }
-    }
+use store::{now_unix_secs, AckOutcome, EnqueueOutcome, PullMode, PullOutcome, Store};
 
-    fn touch(&mut self, now: Instant) {
-        self.last_touched = now;
-    }
-
-    fn is_expired(&self, controls: ResourceControls, now: Instant) -> bool {
-        now.checked_duration_since(self.last_touched)
-            .unwrap_or(Duration::ZERO)
-            >= controls.route_idle_ttl
-    }
-}
+type RateBuckets = HashMap<String, PushRateBucket>;
 
 #[derive(Debug)]
 struct PushRateBucket {
@@ -141,6 +122,9 @@ pub struct ResourceControls {
     pub max_route_count: usize,
     pub push_rate_burst: usize,
     pub push_rate_refill_per_sec: usize,
+    // Vestigial since NA-0642: message lifetime is now governed by the store's
+    // retention TTL (StoreConfig::retention_ttl_secs); kept so existing
+    // constructor call sites remain source-compatible.
     pub route_idle_ttl: Duration,
 }
 
@@ -200,14 +184,7 @@ impl ResourceControls {
         let push_rate_burst = env_limit_or_default("PUSH_RATE_BURST", MAX_PUSH_RATE_BURST_CEILING)?;
         let push_rate_refill_per_sec =
             env_refill_or_default("PUSH_RATE_REFILL_PER_SEC", MAX_PUSH_RATE_BURST_CEILING)?;
-        let route_idle_ttl_ms =
-            env_limit_or_default("ROUTE_IDLE_TTL_MS", ROUTE_IDLE_TTL_MS_DEFAULT)?;
-        Self::new_with_route_idle_ttl_ms(
-            max_route_count,
-            push_rate_burst,
-            push_rate_refill_per_sec,
-            route_idle_ttl_ms,
-        )
+        Self::new(max_route_count, push_rate_burst, push_rate_refill_per_sec)
     }
 }
 
@@ -243,9 +220,12 @@ fn push_rate_refill_or_cap(value: usize) -> usize {
 
 #[derive(Clone)]
 pub struct AppState {
-    // route token -> route state containing queued messages and bounded rate accounting
-    routes: Arc<Mutex<Routes>>,
-
+    // Durable store-and-forward queue (SQLite). Payloads are opaque blobs;
+    // route tokens are stored only as SHA-256 digests.
+    store: Store,
+    // Per-route push rate accounting stays in memory: abuse control, not
+    // correctness state; resets on restart by design.
+    push_rates: Arc<Mutex<RateBuckets>>,
     limits: Limits,
     controls: ResourceControls,
     relay_token: Option<String>,
@@ -276,11 +256,81 @@ impl AppState {
         controls: ResourceControls,
         relay_token: Option<String>,
     ) -> Self {
-        Self {
-            routes: Arc::new(Mutex::new(HashMap::new())),
+        Self::new_with_auth_controls_and_store(
             limits,
             controls,
             relay_token,
+            StoreConfig::default(),
+        )
+        .expect("ERR_STORE_OPEN_IN_MEMORY")
+    }
+
+    pub fn new_with_controls_and_store(
+        limits: Limits,
+        controls: ResourceControls,
+        store_cfg: StoreConfig,
+    ) -> Result<Self, String> {
+        Self::new_with_auth_controls_and_store(
+            limits,
+            controls,
+            std::env::var("RELAY_TOKEN").ok().filter(|v| !v.is_empty()),
+            store_cfg,
+        )
+    }
+
+    pub fn new_with_auth_controls_and_store(
+        limits: Limits,
+        controls: ResourceControls,
+        relay_token: Option<String>,
+        store_cfg: StoreConfig,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            store: Store::open(&store_cfg)?,
+            push_rates: Arc::new(Mutex::new(HashMap::new())),
+            limits,
+            controls,
+            relay_token,
+        })
+    }
+
+    /// Delete undelivered messages older than the retention TTL. Runs lazily
+    /// on every push/pull as well; this entry point exists for the periodic
+    /// background sweep so quiet relays still expire.
+    pub fn run_retention_sweep(&self) -> SweepStats {
+        let now = now_unix_secs();
+        match self.store.retention_sweep(now) {
+            Ok(stats) => {
+                self.log_and_prune_sweep(&stats);
+                stats
+            }
+            Err(e) => {
+                tracing::error!("event=store_error op=retention_sweep detail={e}");
+                SweepStats::default()
+            }
+        }
+    }
+
+    fn log_and_prune_sweep(&self, stats: &SweepStats) {
+        for (log_id, expired) in &stats.expired_routes {
+            info!(
+                "event=retention_expired channel_id={} expired_messages={} ttl_secs={}",
+                log_id,
+                expired,
+                self.store.retention_ttl_secs()
+            );
+        }
+        if !stats.removed_route_keys.is_empty() {
+            if let Ok(mut buckets) = self.push_rates.lock() {
+                for key in &stats.removed_route_keys {
+                    buckets.remove(key);
+                }
+            }
+        }
+    }
+
+    fn drop_rate_bucket(&self, route_key: &str) {
+        if let Ok(mut buckets) = self.push_rates.lock() {
+            buckets.remove(route_key);
         }
     }
 }
@@ -304,6 +354,17 @@ struct PullResp {
 #[derive(serde::Deserialize)]
 struct PullQuery {
     max: Option<usize>,
+    ack: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct AckReq {
+    ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct AckResp {
+    acked: usize,
 }
 
 const ROUTE_TOKEN_HEADER: &str = "x-qsl-route-token";
@@ -312,6 +373,7 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/v1/push", post(push_message))
         .route("/v1/pull", get(pull_message))
+        .route("/v1/pull/ack", post(ack_messages))
         .with_state(state)
 }
 
@@ -323,6 +385,17 @@ fn channel_log_id(channel: &str) -> String {
         state = state.wrapping_mul(0x100000001b3);
     }
     format!("{state:016x}")
+}
+
+fn route_key_for(channel: &str) -> String {
+    // At-rest key: the raw route token is never persisted; lookups hash the
+    // header value, so a stolen store file yields no usable routing tokens.
+    let digest = Sha256::digest(channel.as_bytes());
+    let mut out = String::with_capacity(64);
+    for b in digest {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
 }
 
 fn auth_ok(headers: &HeaderMap, relay_token: Option<&str>) -> bool {
@@ -354,23 +427,18 @@ fn resolve_route_token(headers: &HeaderMap) -> Result<String, &'static str> {
     }
 }
 
-fn expire_idle_routes(routes: &mut Routes, controls: ResourceControls, now: Instant) {
-    let mut expired = Vec::new();
-    routes.retain(|channel, route| {
-        if route.is_expired(controls, now) {
-            expired.push((channel_log_id(channel), route.queue.len()));
-            false
-        } else {
-            true
+async fn run_store<T, F>(f: F) -> Result<T, &'static str>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => {
+            tracing::error!("event=store_error detail={e}");
+            Err("ERR_STORE")
         }
-    });
-    for (channel_id, queued_messages) in expired {
-        info!(
-            "event=route_expired channel_id={} queued_messages={} ttl_ms={}",
-            channel_id,
-            queued_messages,
-            controls.route_idle_ttl.as_millis()
-        );
+        Err(_) => Err("ERR_STORE"),
     }
 }
 
@@ -399,61 +467,92 @@ async fn push_message(
         .filter(|v| !v.trim().is_empty())
         .map(|v| v.to_string())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let Ok(mut g) = st.routes.lock() else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "ERR_LOCK_POISON").into_response();
-    };
+    let route_key = route_key_for(&channel);
+    let log_id = channel_log_id(&channel);
+    let now = now_unix_secs();
 
-    let now = Instant::now();
-    expire_idle_routes(&mut g, st.controls, now);
-    if let Some(route) = g.get_mut(&channel) {
-        if route.queue.len() >= st.limits.max_queue_depth {
+    let status = {
+        let store = st.store.clone();
+        let key = route_key.clone();
+        match run_store(move || store.route_status(&key, now)).await {
+            Ok(v) => v,
+            Err(code) => return (StatusCode::INTERNAL_SERVER_ERROR, code).into_response(),
+        }
+    };
+    st.log_and_prune_sweep(&status.sweep);
+
+    if status.route_exists && status.depth >= st.limits.max_queue_depth {
+        info!(
+            "event=overloaded queue_depth={} max={}",
+            status.depth, st.limits.max_queue_depth
+        );
+        return (StatusCode::TOO_MANY_REQUESTS, "ERR_OVERLOADED").into_response();
+    }
+    if !status.route_exists && status.live_routes >= st.controls.max_route_count {
+        info!(
+            "event=route_cap channel_id={} live_routes={} max={}",
+            log_id, status.live_routes, st.controls.max_route_count
+        );
+        return (StatusCode::TOO_MANY_REQUESTS, "ERR_ROUTE_CAP").into_response();
+    }
+
+    {
+        let mono_now = Instant::now();
+        let Ok(mut buckets) = st.push_rates.lock() else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "ERR_LOCK_POISON").into_response();
+        };
+        let bucket = buckets
+            .entry(route_key.clone())
+            .or_insert_with(|| PushRateBucket::new(mono_now, st.controls));
+        if !bucket.try_consume(st.controls, mono_now) {
+            info!(
+                "event=rate_limited channel_id={} burst={} refill_per_sec={}",
+                log_id, st.controls.push_rate_burst, st.controls.push_rate_refill_per_sec
+            );
+            return (StatusCode::TOO_MANY_REQUESTS, "ERR_RATE_LIMITED").into_response();
+        }
+    }
+
+    let outcome = {
+        let store = st.store.clone();
+        let key = route_key.clone();
+        let lid = log_id.clone();
+        let mid = msg_id.clone();
+        let payload = body.to_vec();
+        let max_depth = st.limits.max_queue_depth;
+        let max_routes = st.controls.max_route_count;
+        match run_store(move || {
+            store.enqueue(&key, &lid, &mid, &payload, now, max_depth, max_routes)
+        })
+        .await
+        {
+            Ok(v) => v,
+            Err(code) => return (StatusCode::INTERNAL_SERVER_ERROR, code).into_response(),
+        }
+    };
+    match outcome {
+        EnqueueOutcome::Accepted => {}
+        EnqueueOutcome::Overloaded { depth } => {
             info!(
                 "event=overloaded queue_depth={} max={}",
-                route.queue.len(),
-                st.limits.max_queue_depth
+                depth, st.limits.max_queue_depth
             );
             return (StatusCode::TOO_MANY_REQUESTS, "ERR_OVERLOADED").into_response();
         }
-        if !route.push_rate.try_consume(st.controls, now) {
-            info!(
-                "event=rate_limited channel_id={} burst={} refill_per_sec={}",
-                channel_log_id(&channel),
-                st.controls.push_rate_burst,
-                st.controls.push_rate_refill_per_sec
-            );
-            return (StatusCode::TOO_MANY_REQUESTS, "ERR_RATE_LIMITED").into_response();
-        }
-        route.queue.push_back((msg_id.clone(), body.to_vec()));
-        route.touch(now);
-    } else {
-        if g.len() >= st.controls.max_route_count {
+        EnqueueOutcome::RouteCap { live_routes } => {
             info!(
                 "event=route_cap channel_id={} live_routes={} max={}",
-                channel_log_id(&channel),
-                g.len(),
-                st.controls.max_route_count
+                log_id, live_routes, st.controls.max_route_count
             );
+            st.drop_rate_bucket(&route_key);
             return (StatusCode::TOO_MANY_REQUESTS, "ERR_ROUTE_CAP").into_response();
         }
-        let mut route = RouteState::new(now, st.controls);
-        if !route.push_rate.try_consume(st.controls, now) {
-            info!(
-                "event=rate_limited channel_id={} burst={} refill_per_sec={}",
-                channel_log_id(&channel),
-                st.controls.push_rate_burst,
-                st.controls.push_rate_refill_per_sec
-            );
-            return (StatusCode::TOO_MANY_REQUESTS, "ERR_RATE_LIMITED").into_response();
-        }
-        route.queue.push_back((msg_id.clone(), body.to_vec()));
-        route.touch(now);
-        g.insert(channel.clone(), route);
     }
 
     // Never log payload; metadata only.
     info!(
         "push channel_id={} id={} bytes={}",
-        channel_log_id(&channel),
+        log_id,
         msg_id,
         body.len()
     );
@@ -478,41 +577,90 @@ async fn pull_message(
         return (StatusCode::BAD_REQUEST, "ERR_BAD_MAX").into_response();
     }
     let max = max.min(st.limits.max_queue_depth);
-    let Ok(mut g) = st.routes.lock() else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "ERR_LOCK_POISON").into_response();
+    let mode = match query.ack.as_deref() {
+        None => PullMode::Legacy,
+        Some("lease") => PullMode::Lease,
+        Some(_) => return (StatusCode::BAD_REQUEST, "ERR_BAD_ACK_MODE").into_response(),
     };
-    let now = Instant::now();
-    expire_idle_routes(&mut g, st.controls, now);
-    let Some(route) = g.get_mut(&channel) else {
-        return StatusCode::NO_CONTENT.into_response();
-    };
-    if route.queue.is_empty() {
-        g.remove(&channel);
-        return StatusCode::NO_CONTENT.into_response();
-    }
-    let mut items = Vec::with_capacity(max);
-    for _ in 0..max {
-        if let Some((msg_id, data)) = route.queue.pop_front() {
-            info!(
-                "pull channel_id={} id={} bytes={}",
-                channel_log_id(&channel),
-                msg_id,
-                data.len()
-            );
-            items.push(PullItem { id: msg_id, data });
-        } else {
-            break;
+    let route_key = route_key_for(&channel);
+    let log_id = channel_log_id(&channel);
+    let now = now_unix_secs();
+
+    let outcome: PullOutcome = {
+        let store = st.store.clone();
+        let key = route_key.clone();
+        match run_store(move || store.pull(&key, max, now, mode)).await {
+            Ok(v) => v,
+            Err(code) => return (StatusCode::INTERNAL_SERVER_ERROR, code).into_response(),
         }
+    };
+    st.log_and_prune_sweep(&outcome.sweep);
+    if outcome.route_drained {
+        st.drop_rate_bucket(&route_key);
     }
-    if let Some(route) = g.get_mut(&channel) {
-        route.touch(now);
+    if outcome.items.is_empty() {
+        return StatusCode::NO_CONTENT.into_response();
     }
-    if g.get(&channel).is_some_and(|route| route.queue.is_empty()) {
-        g.remove(&channel);
+    let mut items = Vec::with_capacity(outcome.items.len());
+    for msg in outcome.items {
+        info!(
+            "pull channel_id={} id={} bytes={}",
+            log_id,
+            msg.msg_id,
+            msg.body.len()
+        );
+        items.push(PullItem {
+            id: msg.msg_id,
+            data: msg.body,
+        });
     }
     (StatusCode::OK, Json(PullResp { items })).into_response()
 }
 
+async fn ack_messages(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !auth_ok(&headers, st.relay_token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
+    }
+    let channel = match resolve_route_token(&headers) {
+        Ok(v) => v,
+        Err(code) => return (StatusCode::BAD_REQUEST, code).into_response(),
+    };
+    let Ok(req) = serde_json::from_slice::<AckReq>(&body) else {
+        return (StatusCode::BAD_REQUEST, "ERR_BAD_ACK_BODY").into_response();
+    };
+    if req.ids.is_empty() || req.ids.len() > MAX_ACK_IDS {
+        return (StatusCode::BAD_REQUEST, "ERR_BAD_ACK_IDS").into_response();
+    }
+    let route_key = route_key_for(&channel);
+    let log_id = channel_log_id(&channel);
+    let now = now_unix_secs();
+
+    let outcome: AckOutcome = {
+        let store = st.store.clone();
+        let key = route_key.clone();
+        let ids = req.ids;
+        match run_store(move || store.ack(&key, &ids, now)).await {
+            Ok(v) => v,
+            Err(code) => return (StatusCode::INTERNAL_SERVER_ERROR, code).into_response(),
+        }
+    };
+    st.log_and_prune_sweep(&outcome.sweep);
+    if outcome.route_drained {
+        st.drop_rate_bucket(&route_key);
+    }
+    info!("ack channel_id={} acked={}", log_id, outcome.acked);
+    (
+        StatusCode::OK,
+        Json(AckResp {
+            acked: outcome.acked,
+        }),
+    )
+        .into_response()
+}
 #[cfg(test)]
 mod tests {
     use super::*;

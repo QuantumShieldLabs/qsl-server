@@ -269,8 +269,29 @@ async fn na0347_quota_rate_retention_purge_and_backup_boundaries_are_bounded() {
     assert_eq!(second_after_drain.status(), ReqStatus::OK);
     handle.abort();
 
-    let (base, handle) =
-        spawn_server_with_auth(Limits::new(64, 2).unwrap(), controls(2, 2, 25), None).await;
+    // NA-0642: the idle-route discard is retired; the retention TTL is the
+    // purge boundary. Undelivered messages expire after RETENTION_TTL_SECS.
+    let retention_store = qsl_server::StoreConfig {
+        retention_ttl_secs: 1,
+        ..qsl_server::StoreConfig::default()
+    };
+    let state = qsl_server::AppState::new_with_auth_controls_and_store(
+        Limits::new(64, 2).unwrap(),
+        controls(2, 2, 25),
+        None,
+        retention_store,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let addr = listener.local_addr().unwrap_or_else(|e| panic!("{e}"));
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, qsl_server::app(state))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+    });
+    let base = format!("http://{addr}");
     let stale = push(
         &client,
         &base,
@@ -281,7 +302,7 @@ async fn na0347_quota_rate_retention_purge_and_backup_boundaries_are_bounded() {
     )
     .await;
     assert_eq!(stale.status(), ReqStatus::OK);
-    tokio::time::sleep(Duration::from_millis(75)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     let expired = pull(&client, &base, "NA0347_TTL_STALE_ROUTE", None, 1).await;
     assert_eq!(expired.status(), ReqStatus::NO_CONTENT);
     handle.abort();

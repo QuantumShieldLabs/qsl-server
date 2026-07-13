@@ -141,7 +141,9 @@ async fn pull(
 
 #[test]
 fn missing_size_depth_config_uses_safe_defaults() {
-    assert_config_stays_running(&[]);
+    // NA-0642: STORE_PATH itself has NO default (fail-closed, see
+    // store_path_is_required_and_fail_closed); every other knob defaults.
+    assert_config_stays_running(&[("STORE_PATH", ":memory:")]);
     let defaults = Limits::default();
     assert_eq!(defaults.max_body_bytes, MAX_BODY_BYTES_CEILING);
     assert_eq!(defaults.max_queue_depth, MAX_QUEUE_DEPTH_CEILING);
@@ -160,51 +162,96 @@ fn missing_size_depth_config_uses_safe_defaults() {
 
 #[test]
 fn malformed_or_zero_size_depth_config_fails_closed() {
+    const STORE: (&str, &str) = ("STORE_PATH", ":memory:");
     assert_config_failure(
-        &[("PORT", "0"), ("MAX_BODY_BYTES", "not-a-size")],
+        &[("PORT", "0"), STORE, ("MAX_BODY_BYTES", "not-a-size")],
         "ERR_INVALID_CONFIG_MAX_BODY_BYTES",
     );
     assert_config_failure(
-        &[("PORT", "0"), ("MAX_BODY_BYTES", "0")],
+        &[("PORT", "0"), STORE, ("MAX_BODY_BYTES", "0")],
         "ERR_INVALID_CONFIG_MAX_BODY_BYTES",
     );
     assert_config_failure(
-        &[("PORT", "0"), ("MAX_QUEUE_DEPTH", "not-a-depth")],
+        &[("PORT", "0"), STORE, ("MAX_QUEUE_DEPTH", "not-a-depth")],
         "ERR_INVALID_CONFIG_MAX_QUEUE_DEPTH",
     );
     assert_config_failure(
-        &[("PORT", "0"), ("MAX_QUEUE_DEPTH", "0")],
+        &[("PORT", "0"), STORE, ("MAX_QUEUE_DEPTH", "0")],
         "ERR_INVALID_CONFIG_MAX_QUEUE_DEPTH",
     );
     assert_config_failure(
-        &[("PORT", "0"), ("MAX_ROUTE_COUNT", "not-a-route-count")],
+        &[
+            ("PORT", "0"),
+            STORE,
+            ("MAX_ROUTE_COUNT", "not-a-route-count"),
+        ],
         "ERR_INVALID_CONFIG_MAX_ROUTE_COUNT",
     );
     assert_config_failure(
-        &[("PORT", "0"), ("MAX_ROUTE_COUNT", "0")],
+        &[("PORT", "0"), STORE, ("MAX_ROUTE_COUNT", "0")],
         "ERR_INVALID_CONFIG_MAX_ROUTE_COUNT",
     );
     assert_config_failure(
-        &[("PORT", "0"), ("PUSH_RATE_BURST", "not-a-burst")],
+        &[("PORT", "0"), STORE, ("PUSH_RATE_BURST", "not-a-burst")],
         "ERR_INVALID_CONFIG_PUSH_RATE_BURST",
     );
     assert_config_failure(
-        &[("PORT", "0"), ("PUSH_RATE_BURST", "0")],
+        &[("PORT", "0"), STORE, ("PUSH_RATE_BURST", "0")],
         "ERR_INVALID_CONFIG_PUSH_RATE_BURST",
     );
     assert_config_failure(
-        &[("PORT", "0"), ("PUSH_RATE_REFILL_PER_SEC", "not-a-refill")],
+        &[
+            ("PORT", "0"),
+            STORE,
+            ("PUSH_RATE_REFILL_PER_SEC", "not-a-refill"),
+        ],
         "ERR_INVALID_CONFIG_PUSH_RATE_REFILL_PER_SEC",
     );
-    assert_config_stays_running(&[("PUSH_RATE_REFILL_PER_SEC", "0")]);
+    assert_config_stays_running(&[STORE, ("PUSH_RATE_REFILL_PER_SEC", "0")]);
     assert_config_failure(
-        &[("PORT", "0"), ("ROUTE_IDLE_TTL_MS", "not-a-ttl")],
-        "ERR_INVALID_CONFIG_ROUTE_IDLE_TTL_MS",
+        &[("PORT", "0"), STORE, ("RETENTION_TTL_SECS", "not-a-ttl")],
+        "ERR_INVALID_CONFIG_RETENTION_TTL_SECS",
     );
     assert_config_failure(
-        &[("PORT", "0"), ("ROUTE_IDLE_TTL_MS", "0")],
-        "ERR_INVALID_CONFIG_ROUTE_IDLE_TTL_MS",
+        &[("PORT", "0"), STORE, ("RETENTION_TTL_SECS", "0")],
+        "ERR_INVALID_CONFIG_RETENTION_TTL_SECS",
     );
+    assert_config_failure(
+        &[("PORT", "0"), STORE, ("PULL_LEASE_SECS", "not-a-lease")],
+        "ERR_INVALID_CONFIG_PULL_LEASE_SECS",
+    );
+    assert_config_failure(
+        &[("PORT", "0"), STORE, ("PULL_LEASE_SECS", "0")],
+        "ERR_INVALID_CONFIG_PULL_LEASE_SECS",
+    );
+}
+
+#[test]
+fn store_path_is_required_and_fail_closed() {
+    // No STORE_PATH at all: the relay must refuse to start rather than fall
+    // back to a silent in-memory queue (NA-0642 durability posture).
+    assert_config_failure(&[("PORT", "0")], "ERR_INVALID_CONFIG_STORE_PATH");
+    // Unopenable path: same fail-closed code at startup.
+    assert_config_failure(
+        &[
+            ("PORT", "0"),
+            ("STORE_PATH", "/nonexistent-na0642-dir/relay.db"),
+        ],
+        "ERR_INVALID_CONFIG_STORE_PATH",
+    );
+}
+
+#[test]
+fn route_idle_ttl_env_is_deprecated_and_ignored() {
+    // NA-0642: the idle-route discard is retired; RETENTION_TTL_SECS governs
+    // message lifetime. A stale relay.env must not brick a restart — any
+    // ROUTE_IDLE_TTL_MS value (even formerly-invalid ones) is warn-and-ignore.
+    assert_config_stays_running(&[
+        ("STORE_PATH", ":memory:"),
+        ("ROUTE_IDLE_TTL_MS", "not-a-ttl"),
+    ]);
+    assert_config_stays_running(&[("STORE_PATH", ":memory:"), ("ROUTE_IDLE_TTL_MS", "0")]);
+    assert_config_stays_running(&[("STORE_PATH", ":memory:"), ("ROUTE_IDLE_TTL_MS", "300000")]);
 }
 
 #[test]
@@ -214,14 +261,17 @@ fn above_ceiling_size_depth_config_is_capped_explicitly() {
     let route_above_ceiling = (MAX_ROUTE_COUNT_CEILING + 1).to_string();
     let burst_above_ceiling = (MAX_PUSH_RATE_BURST_CEILING + 1).to_string();
     let refill_above_ceiling = (MAX_PUSH_RATE_REFILL_PER_SEC_CEILING + 1).to_string();
-    let ttl_above_ceiling = (MAX_ROUTE_IDLE_TTL_MS_CEILING + 1).to_string();
+    let retention_above_ceiling = (qsl_server::MAX_RETENTION_TTL_SECS_CEILING + 1).to_string();
+    let lease_above_ceiling = (qsl_server::MAX_PULL_LEASE_SECS_CEILING + 1).to_string();
     assert_config_stays_running(&[
+        ("STORE_PATH", ":memory:"),
         ("MAX_BODY_BYTES", body_above_ceiling.as_str()),
         ("MAX_QUEUE_DEPTH", depth_above_ceiling.as_str()),
         ("MAX_ROUTE_COUNT", route_above_ceiling.as_str()),
         ("PUSH_RATE_BURST", burst_above_ceiling.as_str()),
         ("PUSH_RATE_REFILL_PER_SEC", refill_above_ceiling.as_str()),
-        ("ROUTE_IDLE_TTL_MS", ttl_above_ceiling.as_str()),
+        ("RETENTION_TTL_SECS", retention_above_ceiling.as_str()),
+        ("PULL_LEASE_SECS", lease_above_ceiling.as_str()),
     ]);
     let limits = Limits::new(MAX_BODY_BYTES_CEILING + 1, MAX_QUEUE_DEPTH_CEILING + 1).unwrap();
     let controls = ResourceControls::new_with_route_idle_ttl_ms(
@@ -249,7 +299,11 @@ fn above_ceiling_size_depth_config_is_capped_explicitly() {
 fn invalid_port_and_bind_addr_fail_closed() {
     assert_config_failure(&[("PORT", "not-a-port")], "ERR_INVALID_ENV_PORT");
     assert_config_failure(
-        &[("PORT", "0"), ("BIND_ADDR", "not a socket address")],
+        &[
+            ("PORT", "0"),
+            ("STORE_PATH", ":memory:"),
+            ("BIND_ADDR", "not a socket address"),
+        ],
         "ERR_BIND_PARSE",
     );
 }
