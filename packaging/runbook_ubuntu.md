@@ -43,6 +43,9 @@ Edit `/etc/qsl-server/relay.env`:
 - `PULL_LEASE_SECS=60` (visibility timeout for acknowledged pulls, `?ack=lease`)
 - `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH` as needed (template default 257 — the
   NA-0598 exact-4-MiB attachment needs 256 chunks + 1 manifest)
+- `RELAY_NAME=`, `RELAY_ATTACHMENTS_SERVICE_URL=`, `RELAY_MIN_CLIENT_VERSION=`
+  (optional, NA-0652 — reported by `GET /v1/server-info` to authorized clients;
+  see DOC-SRV-006. Unset is fine; startup never fails on them)
 
 Apply config:
 

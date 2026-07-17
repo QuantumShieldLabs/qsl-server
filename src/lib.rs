@@ -218,6 +218,33 @@ fn push_rate_refill_or_cap(value: usize) -> usize {
     value.min(MAX_PUSH_RATE_REFILL_PER_SEC_CEILING)
 }
 
+// NA-0652 server-info descriptive fields. Reporting-only: nothing here gates
+// any relay behavior (the capability document advertises FEATURES, never
+// SECURITY — DOC-SRV-006). All three are optional; absent or empty env vars
+// never fail startup, matching the RELAY_TOKEN env-only precedent.
+#[derive(Clone, Debug, Default)]
+pub struct ServerInfoCfg {
+    pub name: Option<String>,
+    pub attachments_service_url: Option<String>,
+    pub min_client_version: Option<String>,
+}
+
+impl ServerInfoCfg {
+    pub fn from_env() -> Self {
+        Self {
+            name: std::env::var("RELAY_NAME")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            attachments_service_url: std::env::var("RELAY_ATTACHMENTS_SERVICE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            min_client_version: std::env::var("RELAY_MIN_CLIENT_VERSION")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     // Durable store-and-forward queue (SQLite). Payloads are opaque blobs;
@@ -229,6 +256,11 @@ pub struct AppState {
     limits: Limits,
     controls: ResourceControls,
     relay_token: Option<String>,
+    // Validated copy of StoreConfig::retention_ttl_secs so /v1/server-info can
+    // report the live value the store enforces (same retention_ttl_or_error
+    // path Store::open applies).
+    retention_ttl_secs: usize,
+    server_info: ServerInfoCfg,
 }
 
 impl AppState {
@@ -284,12 +316,31 @@ impl AppState {
         relay_token: Option<String>,
         store_cfg: StoreConfig,
     ) -> Result<Self, String> {
+        Self::new_with_auth_controls_store_and_info(
+            limits,
+            controls,
+            relay_token,
+            store_cfg,
+            ServerInfoCfg::from_env(),
+        )
+    }
+
+    pub fn new_with_auth_controls_store_and_info(
+        limits: Limits,
+        controls: ResourceControls,
+        relay_token: Option<String>,
+        store_cfg: StoreConfig,
+        server_info: ServerInfoCfg,
+    ) -> Result<Self, String> {
+        let retention_ttl_secs = retention_ttl_or_error(store_cfg.retention_ttl_secs)?;
         Ok(Self {
             store: Store::open(&store_cfg)?,
             push_rates: Arc::new(Mutex::new(HashMap::new())),
             limits,
             controls,
             relay_token,
+            retention_ttl_secs,
+            server_info,
         })
     }
 
@@ -374,7 +425,52 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/push", post(push_message))
         .route("/v1/pull", get(pull_message))
         .route("/v1/pull/ack", post(ack_messages))
+        .route("/v1/server-info", get(server_info))
         .with_state(state)
+}
+
+// NA-0652 capability document (DOC-SRV-006). Served behind the same bearer
+// gate as the relay routes; on a bearer relay an unauthorized request gets the
+// FIXED two-key probe — identical for a missing and a wrong token, so the
+// response is never a token oracle, and the registry never grows operator
+// config. The full document reports LIVE config only; it gates features,
+// never security.
+async fn server_info(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if !auth_ok(&headers, st.relay_token.as_deref()) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "server": "qsl-server",
+                "auth": { "mode": "bearer" }
+            })),
+        )
+            .into_response();
+    }
+    let auth_mode = if st.relay_token.is_some() {
+        "bearer"
+    } else {
+        "open"
+    };
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "server": "qsl-server",
+            "version": env!("CARGO_PKG_VERSION"),
+            "name": st.server_info.name.clone().unwrap_or_default(),
+            "api": ["push_v1", "pull_v1", "pull_ack_lease_v1"],
+            "auth": { "mode": auth_mode },
+            "limits": {
+                "max_body_bytes": st.limits.max_body_bytes,
+                "max_queue_depth": st.limits.max_queue_depth,
+            },
+            "retention": { "ttl_secs": st.retention_ttl_secs },
+            "directory": { "mode": "none" },
+            "attachments": { "service_url": st.server_info.attachments_service_url },
+            "kt": { "mode": "none" },
+            "min_client_version": st.server_info.min_client_version,
+        })),
+    )
+        .into_response()
 }
 
 fn channel_log_id(channel: &str) -> String {
