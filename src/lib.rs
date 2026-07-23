@@ -504,9 +504,30 @@ fn auth_ok(headers: &HeaderMap, relay_token: Option<&str>) -> bool {
             let Some(provided) = raw.strip_prefix("Bearer ") else {
                 return false;
             };
-            provided == token
+            // Constant-time credential check. `str::eq` short-circuits on the first
+            // differing byte -> a remote timing oracle on a network-exposed bearer
+            // token (cf. the client's `hs_ct_eq_32`, ENG-0003, and this file's own
+            // `route_key_for`). Reducing both sides to a fixed 32-byte digest first
+            // also removes length dependence: the fold does identical work for every
+            // input. NB: `subtle` is present in Cargo.lock only via rustls under the
+            // reqwest DEV-dependency, so it is NOT in the production graph -- do not
+            // reach for it here; `sha2` is already a direct dependency of this crate.
+            ct_eq_secret(provided, token)
         }
     }
+}
+
+/// Constant-time equality of two secrets, folded over a fixed 32-byte SHA-256
+/// digest so the comparison leaks neither content nor length. Same XOR-accumulate
+/// shape as the client handshake's `hs_ct_eq_32` (ENG-0003).
+fn ct_eq_secret(a: &str, b: &str) -> bool {
+    let da = Sha256::digest(a.as_bytes());
+    let db = Sha256::digest(b.as_bytes());
+    let mut diff = 0u8;
+    for i in 0..32 {
+        diff |= da[i] ^ db[i];
+    }
+    diff == 0
 }
 
 fn resolve_route_token(headers: &HeaderMap) -> Result<String, &'static str> {
@@ -1166,6 +1187,49 @@ mod tests {
             "ERR_UNAUTHORIZED"
         );
 
+        let pull_ok = client
+            .get(format!("{}/v1/pull?max=1", base))
+            .header(ROUTE_TOKEN_HEADER, "auth")
+            .header("Authorization", "Bearer topsecret")
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pull_ok.status(), ReqStatus::NO_CONTENT);
+        handle.abort();
+    }
+
+    // Same-length wrong token: "topsecreX" vs the configured "topsecret", both 9
+    // bytes. The wrong_token test above uses "wrong" (5 bytes), so the old `==`
+    // rejected on length before comparing a byte and passed against the buggy code.
+    // This case is the only behavioural test that exercises the constant-time fold
+    // -- it proves the fold returns the right ANSWER (reject + no mutation), not
+    // that it runs in constant TIME (a structural, read-verified claim; see §3).
+    #[tokio::test]
+    async fn auth_enabled_wrong_token_same_length_401_no_mutation() {
+        let (base, handle) = spawn_server_with_token(
+            Limits {
+                max_body_bytes: 1024 * 1024,
+                max_queue_depth: 8,
+            },
+            Some("topsecret".to_string()),
+        )
+        .await;
+        let client = reqwest::Client::new();
+        let push = client
+            .post(format!("{}/v1/push", base))
+            .header(ROUTE_TOKEN_HEADER, "auth")
+            .header("Authorization", "Bearer topsecreX")
+            .body(b"x".to_vec())
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(push.status(), ReqStatus::UNAUTHORIZED);
+        assert_eq!(
+            push.text().await.unwrap_or_else(|e| panic!("{e}")),
+            "ERR_UNAUTHORIZED"
+        );
+
+        // Queue unmutated: the correct token drains nothing.
         let pull_ok = client
             .get(format!("{}/v1/pull?max=1", base))
             .header(ROUTE_TOKEN_HEADER, "auth")
