@@ -102,3 +102,58 @@
   - **Decision:** qsl-server's bearer-token check in `auth_ok` no longer uses `provided == token` (`str::eq`, which short-circuits on the first differing byte). Both sides are now reduced to a fixed 32-byte SHA-256 digest and folded with an XOR-accumulate loop (`diff |= da[i] ^ db[i]` over all 32 bytes, `diff == 0`) in a new private `ct_eq_secret` helper — the same shape as the qsc client handshake's `hs_ct_eq_32` (qsl-protocol ENG-0003) and consistent with this file's existing `route_key_for`, which already hashes the OTHER secret (the route token). Hashing first normalizes both inputs to 32 bytes, so the fold does identical work for every input, closing the length leak as well. The two non-secret `return false` guards (missing / malformed `Authorization` header) are retained — they branch on attacker-known request shape, not on the secret. No new dependency: `sha2` is already a direct dependency of this crate (`subtle` is present in `Cargo.lock` only via rustls under the reqwest DEV-dependency and is deliberately NOT added to the production graph). No wire, API, protocol, schema, or env change; the four gated handlers (`server-info`, `push`, `pull`, `pull/ack`) still reject-before-mutation because `auth_ok` remains their first statement. A same-length wrong-token reject test (`auth_enabled_wrong_token_same_length_401_no_mutation`, `"topsecreX"` vs `"topsecret"`, both 9 bytes) is added because the pre-existing wrong-token test uses different-length tokens, so `==` rejected on length before comparing a byte and passed against the buggy code.
   - **Rationale:** This is the last unfixed HIGH (C-2) from the 2026-07-22 independent audit and the only one outside the governance spine, on the single component deliberately exposed to the network. On a shared bearer token, `str::eq`'s short-circuit is a remote timing oracle; the LAN/tailnet deployment posture is exactly the low-jitter regime in which byte-at-a-time statistical amplification is practical. Fixing it in the file's existing idiom (SHA-256 then fold) makes the relay treat both of its secrets the same way, which is the strongest form of the fix — the property earned is structural (fixed work over the full digest, no data-dependent early return), read-verified, not a measured timing claim. `subtle::ConstantTimeEq` was deliberately not used: it would newly enter the production dependency graph, and — being defined for equal-length slices — would not close the length leak without a length-visible branch, whereas hashing-first closes it for free. HMAC with a random per-process key was not used: its random key defends against precomputation, but an attacker who already holds a candidate token can simply send it, so plain SHA-256 delivers the needed property (comparison time independent of matching-prefix length) with no added machinery. Governance authority lives in qsl-protocol (NA-0670, D606, D-1297).
   - **References:** qsl-protocol NA-0670 / QSL-DIR-2026-07-23-606 (D606) / D-1297; 2026-07-22 independent audit finding C-2; qsl-protocol ENG-0003 (client `hs_ct_eq_32`); `src/lib.rs` (`auth_ok`, `ct_eq_secret`); `TRACEABILITY.md`
+
+- **ID:** D-0015
+  - **Status:** Accepted
+  - **Date:** 2026-07-25
+  - **Goals:** G4
+  - **Decision:** Add the operator-infrastructure literal gate and a `cargo audit`
+    advisories job to this repository's CI, and extend clippy to `--all-targets`,
+    per spine **D613** (NA-0677). **⚠ The intent this came from said "port the
+    spine's public-safety job". There was nothing to port:** that job scans for
+    private keys and cloud tokens and has never contained an address, path or
+    host pattern — which is exactly why it ran green on every pull request that
+    published a private LAN address. The failure was the pattern set, not the
+    scan's scope. `scripts/ci/infra_literal_scan.py` is that missing pattern set.
+  - **The scanner is byte-identical to the copies in `qsl-desktop`,
+    `qsl-attachments` and `qsl-protocol`** (`cmp`-proven at landing). The pattern
+    set is deliberately **not forked**: one source of truth for one question.
+  - **Tiers.** Tier 1 (network-identifying literals and personal identity) over
+    the whole tracked tree, failing on any hit. Tier 2b (low-frequency private
+    names) over added lines only. Tier 2a (build-root and home paths) not scanned
+    at all — the governance convention cites directives by absolute path, so a
+    gate on them would be unadoptable. This repository is **Tier-1 clean** at
+    landing: 74 files, 13,896 lines examined, zero hits.
+  - **The private names are salted SHA-256 digests, not text**, because this
+    repository is public and a pattern file naming them would republish what the
+    sanitize lane removed — and the Tier-1 scan would then hit its own pattern
+    file. The plaintext list is operator-held. Matching is **token-wise**
+    (splitting on non-alphanumerics *and* camelCase transitions), so a name
+    embedded in an identifier is caught while one merely spanning a camelCase
+    seam is not.
+  - **Advisories: `cargo audit --deny warnings`, with no waiver file** — this
+    repository's dependency graph is clean today (verified at landing). If that
+    changes, the fix is a **named-ID** waiver in `.cargo/audit.toml`, never
+    dropping `--deny warnings`, which would accept every future unmaintained or
+    unsound crate silently.
+  - **Clippy `--all-targets`** replaces the lib+bin-only invocation. This
+    repository was already clean under it (measured before the change), so this
+    is a defensive tightening rather than a fix — it closes the gap by which a
+    test-only lint could accumulate unseen.
+  - **⚠ Both new jobs are ADVISORY, not blocking.** This repository requires
+    exactly one status context, `rust`, which is unchanged. `public-safety` and
+    `advisories` run and report but **cannot block a merge** until the operator
+    adds them to the required set — a branch-protection change, which is the
+    operator's act. Green is not the same as blocking.
+  - **A pre-commit call site** (`scripts/hooks/pre-commit`, opt-in via
+    `git config core.hooksPath scripts/hooks`) runs the same instrument over the
+    staged set. CI is the enforcement; hooks are not cloned.
+  - **Proved by positive control in THIS repository**, not inherited from the
+    file: a Tier-1 host name embedded as `SOME_<name>_THING` in a tracked file
+    makes the scan FAIL, and removing it makes it pass. A gate is a property of
+    the repo it runs in, not of the script. Evidence:
+    `/srv/qbuild/evidence/NA-0677/gate_positive_control.txt`.
+  - **References:** spine D613 (APPROVED 2026-07-25, amended twice; sha256
+    `586ae25a…19d57fe0a9b95a51`, 446 lines) and spine NA-0677; qsl-desktop D-0014
+    (the first landing, which carries the waiver-file case); spine NA-0676/D-1307
+    (the sanitize that made a whole-tree tier adoptable).
