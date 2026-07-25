@@ -21,4 +21,47 @@ jobs:
       - name: test
         run: cargo test -q
       - name: clippy
-        run: cargo clippy -q -- -D warnings
+        run: cargo clippy --all-targets -q -- -D warnings
+
+  # NA-0677 / D613. ⚠ ADVISORY UNTIL BRANCH PROTECTION CHANGES: this repository
+  # requires exactly one status context, `rust`. The two jobs below RUN and
+  # REPORT on every PR, but they cannot block a merge until the operator adds
+  # them to the required set. Green is not the same as blocking.
+  public-safety:
+    name: public-safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # Pattern provenance: adapted 2026-07-25 from the operator-side
+      # publication scanner; scripts/ci/infra_literal_scan.py is now the source
+      # of truth. The name values in it are salted digests -- the plaintext list
+      # is operator-held, along with how to regenerate them.
+      #
+      # The spine's existing public-safety gate scans for private keys and cloud
+      # tokens only. It has never carried an address, path or host pattern, which
+      # is exactly why it ran green on the PRs that published a private LAN
+      # address. This job is that missing pattern set.
+      - name: infra-literal scan (Tier 1, whole tracked tree)
+        run: python3 scripts/ci/infra_literal_scan.py --mode tree
+      - name: infra-literal scan (Tier 2b, added lines)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          python3 scripts/ci/infra_literal_scan.py --mode diff --base "origin/${{ github.base_ref }}"
+
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: install cargo-audit (locked, pinned)
+        run: cargo install --locked cargo-audit --version 0.22.0
+      # --deny warnings with NO waiver file: this repository's dependency graph
+      # is clean today. If that changes, the fix is a named-ID waiver in
+      # .cargo/audit.toml -- never dropping --deny warnings, which would accept
+      # every future unmaintained or unsound crate silently.
+      - name: cargo audit
+        run: cargo audit --deny warnings
