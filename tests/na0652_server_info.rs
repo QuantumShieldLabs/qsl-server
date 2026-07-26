@@ -176,9 +176,12 @@ async fn document_values_track_injected_config() {
     assert_eq!(doc["attachments"]["service_url"], "https://attach.example");
     assert_eq!(doc["min_client_version"], "0.9.0");
     assert_eq!(doc["version"], env!("CARGO_PKG_VERSION"));
+    // NA-0678: `invite_v1` appended. This guard is EXACT by design -- it is
+    // meant to fail on any change to the advertised API set, and it moves in
+    // the same commit as the change (D614 §2d).
     assert_eq!(
         doc["api"],
-        serde_json::json!(["push_v1", "pull_v1", "pull_ack_lease_v1"])
+        serde_json::json!(["push_v1", "pull_v1", "pull_ack_lease_v1", "invite_v1"])
     );
     assert_eq!(doc["directory"]["mode"], "none");
     assert_eq!(doc["kt"]["mode"], "none");
@@ -227,6 +230,9 @@ async fn full_document_top_level_field_set_is_exact() {
             "attachments",
             "auth",
             "directory",
+            // NA-0678: the invite capability block. Additive -- every pre-existing
+            // key is still present and unrenamed.
+            "invite",
             "kt",
             "limits",
             "min_client_version",

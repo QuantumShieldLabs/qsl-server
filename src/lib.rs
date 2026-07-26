@@ -24,7 +24,10 @@ pub use store::{
     RETENTION_TTL_SECS_DEFAULT,
 };
 
-use store::{now_unix_secs, AckOutcome, EnqueueOutcome, PullMode, PullOutcome, Store};
+use store::{
+    now_unix_secs, AckOutcome, EnqueueOutcome, InviteCreateOutcome, InviteRedeemOutcome,
+    InviteRevokeOutcome, PullMode, PullOutcome, SlotReject, Store,
+};
 
 type RateBuckets = HashMap<String, PushRateBucket>;
 
@@ -77,6 +80,37 @@ pub struct Limits {
     pub max_queue_depth: usize,
 }
 
+// NA-0678 (D614 §2e) invite-slot resource controls, in the existing idiom:
+// ceiling + zero-rejects + ERR_INVALID_CONFIG_*.
+//
+// The slot cap and the create-rate bucket are BOTH required and are NOT
+// substitutes: the cap bounds STORAGE, the bucket bounds DENIAL. Operator
+// ruling (D614 F6): the availability of invite-create is a security property;
+// slot-cap-only is a DoS. On an open relay -- the posture this slice's spam
+// gate exists for -- any anonymous caller could otherwise fill the cap in one
+// burst and deny invite creation to everyone until the slots expire.
+pub const MAX_INVITE_SLOTS_DEFAULT: usize = 256;
+pub const MAX_INVITE_SLOTS_CEILING: usize = 4_096;
+pub const MAX_INVITE_BUNDLE_BYTES_DEFAULT: usize = 16 * 1024;
+pub const MAX_INVITE_BUNDLE_BYTES_CEILING: usize = 64 * 1024;
+// Design §8 Q1: 72 h default. Ceiling matches the retention ceiling (30 days).
+pub const MAX_INVITE_EXPIRY_SECS_DEFAULT: usize = 259_200;
+pub const MAX_INVITE_EXPIRY_SECS_CEILING: usize = 2_592_000;
+pub const INVITE_CREATE_BURST_DEFAULT: usize = 32;
+pub const INVITE_CREATE_BURST_CEILING: usize = 4_096;
+pub const INVITE_CREATE_REFILL_PER_SEC_DEFAULT: usize = 1;
+
+// The capability and the revoke token ride in the JSON BODY of their POSTs, never
+// in a path or query parameter: D-0008 recorded that URI-carried secrets leak
+// through proxy logs, shell history and traces, D-0009 moved the route token to a
+// header, and D-0010 retired the URI form outright. `invite_id` is the same class
+// of secret -- it IS the mailbox route key.
+//
+// The handshake TICKET is the exception and must be a header: it rides on
+// `/v1/push`, whose body is the opaque handshake payload and cannot be
+// repurposed. That matches the `x-qsl-route-token` precedent exactly.
+const INVITE_TICKET_HEADER: &str = "x-qsl-invite-ticket";
+
 pub const MAX_BODY_BYTES_CEILING: usize = 1024 * 1024;
 pub const MAX_QUEUE_DEPTH_CEILING: usize = 257;
 pub const MAX_ROUTE_COUNT_CEILING: usize = 256;
@@ -114,6 +148,61 @@ impl Limits {
         let max_body_bytes = env_limit_or_default("MAX_BODY_BYTES", MAX_BODY_BYTES_CEILING)?;
         let max_queue_depth = env_limit_or_default("MAX_QUEUE_DEPTH", MAX_QUEUE_DEPTH_CEILING)?;
         Self::new(max_body_bytes, max_queue_depth)
+    }
+}
+
+/// NA-0678 invite-slot limits. Separate from `Limits`/`ResourceControls` so the
+/// existing relay contract's knobs stay exactly what they were.
+#[derive(Clone, Copy, Debug)]
+pub struct InviteLimits {
+    pub max_slots: usize,
+    pub max_bundle_bytes: usize,
+    pub max_expiry_secs: usize,
+    pub create_burst: usize,
+    pub create_refill_per_sec: usize,
+}
+
+impl Default for InviteLimits {
+    fn default() -> Self {
+        Self {
+            max_slots: MAX_INVITE_SLOTS_DEFAULT,
+            max_bundle_bytes: MAX_INVITE_BUNDLE_BYTES_DEFAULT,
+            max_expiry_secs: MAX_INVITE_EXPIRY_SECS_DEFAULT,
+            create_burst: INVITE_CREATE_BURST_DEFAULT,
+            create_refill_per_sec: INVITE_CREATE_REFILL_PER_SEC_DEFAULT,
+        }
+    }
+}
+
+impl InviteLimits {
+    pub fn new(
+        max_slots: usize,
+        max_bundle_bytes: usize,
+        max_expiry_secs: usize,
+        create_burst: usize,
+        create_refill_per_sec: usize,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            max_slots: limit_or_error("MAX_INVITE_SLOTS", max_slots, MAX_INVITE_SLOTS_CEILING)?,
+            max_bundle_bytes: limit_or_error(
+                "MAX_INVITE_BUNDLE_BYTES",
+                max_bundle_bytes,
+                MAX_INVITE_BUNDLE_BYTES_CEILING,
+            )?,
+            max_expiry_secs: limit_or_error(
+                "MAX_INVITE_EXPIRY_SECS",
+                max_expiry_secs,
+                MAX_INVITE_EXPIRY_SECS_CEILING,
+            )?,
+            create_burst: limit_or_error(
+                "INVITE_CREATE_BURST",
+                create_burst,
+                INVITE_CREATE_BURST_CEILING,
+            )?,
+            // A refill of 0 is legal here for the same reason it is on the push
+            // bucket: deterministic no-refill operation.
+            create_refill_per_sec: create_refill_per_sec.min(MAX_PUSH_RATE_REFILL_PER_SEC_CEILING),
+        })
     }
 }
 
@@ -261,6 +350,10 @@ pub struct AppState {
     // path Store::open applies).
     retention_ttl_secs: usize,
     server_info: ServerInfoCfg,
+    invite_limits: InviteLimits,
+    // GLOBAL, not per-route: invite creation has no route token yet, so the
+    // per-route push bucket structurally cannot cover it (D614 C8/F6).
+    invite_create_rate: Arc<Mutex<PushRateBucket>>,
 }
 
 impl AppState {
@@ -332,7 +425,31 @@ impl AppState {
         store_cfg: StoreConfig,
         server_info: ServerInfoCfg,
     ) -> Result<Self, String> {
+        Self::new_full(
+            limits,
+            controls,
+            relay_token,
+            store_cfg,
+            server_info,
+            InviteLimits::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_full(
+        limits: Limits,
+        controls: ResourceControls,
+        relay_token: Option<String>,
+        store_cfg: StoreConfig,
+        server_info: ServerInfoCfg,
+        invite_limits: InviteLimits,
+    ) -> Result<Self, String> {
         let retention_ttl_secs = retention_ttl_or_error(store_cfg.retention_ttl_secs)?;
+        let invite_bucket_controls = ResourceControls {
+            push_rate_burst: invite_limits.create_burst,
+            push_rate_refill_per_sec: invite_limits.create_refill_per_sec,
+            ..ResourceControls::default()
+        };
         Ok(Self {
             store: Store::open(&store_cfg)?,
             push_rates: Arc::new(Mutex::new(HashMap::new())),
@@ -341,6 +458,11 @@ impl AppState {
             relay_token,
             retention_ttl_secs,
             server_info,
+            invite_limits,
+            invite_create_rate: Arc::new(Mutex::new(PushRateBucket::new(
+                Instant::now(),
+                invite_bucket_controls,
+            ))),
         })
     }
 
@@ -420,13 +542,348 @@ struct AckResp {
 
 const ROUTE_TOKEN_HEADER: &str = "x-qsl-route-token";
 
+// NA-0678: exactly THREE invite routes. There is deliberately no
+// `/v1/invite/mint` -- the client mints the capability and uploads only its
+// hash, so no relay-side path ever holds a capability in plaintext before a
+// redeemer presents one (D614 F1).
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/v1/push", post(push_message))
         .route("/v1/pull", get(pull_message))
         .route("/v1/pull/ack", post(ack_messages))
         .route("/v1/server-info", get(server_info))
+        .route("/v1/invite/create", post(invite_create))
+        .route("/v1/invite/redeem", post(invite_redeem))
+        .route("/v1/invite/revoke", post(invite_revoke))
         .with_state(state)
+}
+
+#[derive(serde::Deserialize)]
+struct InviteCreateReq {
+    invite_id: String,
+    cap_hash: String,
+    expiry: i64,
+    bundle_b64: String,
+    invite_sig_b64: String,
+}
+
+#[derive(Serialize)]
+struct InviteCreateResp {
+    revoke_token: String,
+}
+
+#[derive(serde::Deserialize)]
+struct InviteRedeemReq {
+    invite_id: String,
+    cap: String,
+}
+
+#[derive(Serialize)]
+struct InviteRedeemResp {
+    bundle_b64: String,
+    invite_sig_b64: String,
+    ticket: String,
+}
+
+#[derive(serde::Deserialize)]
+struct InviteRevokeReq {
+    invite_id: String,
+    revoke_token: String,
+}
+
+#[derive(Serialize)]
+struct InviteRevokeResp {
+    revoked: bool,
+}
+
+/// URL-safe base64 without padding, implemented here rather than pulled in:
+/// this crate has no base64 dependency and D614 forbids dependency motion.
+/// The relay never interprets what it decodes -- these bytes are opaque.
+fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'-' => Some(62),
+            b'_' => Some(63),
+            _ => None,
+        }
+    }
+    let s = s.trim_end_matches('=');
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    for c in s.bytes() {
+        acc = (acc << 6) | u32::from(val(c)?);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xff) as u8);
+        }
+    }
+    // Reject trailing garbage: leftover bits must be zero padding, never data.
+    if bits >= 6 || (acc & ((1 << bits) - 1)) != 0 {
+        return None;
+    }
+    Some(out)
+}
+
+fn b64_encode(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(T[((n >> 6) & 63) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(T[(n & 63) as usize] as char);
+        }
+    }
+    out
+}
+
+/// 128-bit CSPRNG token, rendered hex. Uses `Uuid::new_v4`, which this crate
+/// already depends on and which draws from the OS CSPRNG -- no new dependency
+/// (D614 §7 forbids dependency motion).
+fn random_token_128() -> String {
+    let a = Uuid::new_v4();
+    a.simple().to_string()
+}
+
+fn sha256_hex(s: &str) -> String {
+    let digest = Sha256::digest(s.as_bytes());
+    let mut out = String::with_capacity(64);
+    for b in digest {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+async fn invite_create(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !auth_ok(&headers, st.relay_token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
+    }
+    // The global create-rate gate runs BEFORE any parsing or storage work, so a
+    // flood costs the relay a lock and nothing else.
+    {
+        let mono_now = Instant::now();
+        let Ok(mut bucket) = st.invite_create_rate.lock() else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "ERR_LOCK_POISON").into_response();
+        };
+        let controls = ResourceControls {
+            push_rate_burst: st.invite_limits.create_burst,
+            push_rate_refill_per_sec: st.invite_limits.create_refill_per_sec,
+            ..ResourceControls::default()
+        };
+        if !bucket.try_consume(controls, mono_now) {
+            info!(
+                "event=invite_rate_limited burst={} refill_per_sec={}",
+                st.invite_limits.create_burst, st.invite_limits.create_refill_per_sec
+            );
+            return (StatusCode::TOO_MANY_REQUESTS, "ERR_RATE_LIMITED").into_response();
+        }
+    }
+    let Ok(req) = serde_json::from_slice::<InviteCreateReq>(&body) else {
+        return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
+    };
+    if req.invite_id.trim().is_empty() || req.cap_hash.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
+    }
+    let (Some(bundle), Some(invite_sig)) =
+        (b64_decode(&req.bundle_b64), b64_decode(&req.invite_sig_b64))
+    else {
+        return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
+    };
+    if bundle.is_empty() || invite_sig.is_empty() {
+        return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
+    }
+    if bundle.len() > st.invite_limits.max_bundle_bytes
+        || invite_sig.len() > st.invite_limits.max_bundle_bytes
+    {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "ERR_INVITE_TOO_LARGE").into_response();
+    }
+    let now = now_unix_secs();
+    if req.expiry <= now {
+        return (StatusCode::BAD_REQUEST, "ERR_INVITE_EXPIRED").into_response();
+    }
+    // Clamp rather than reject: an over-long expiry is the client asking for
+    // more than this relay offers, and the relay's ceiling governs.
+    let max_expiry = now.saturating_add(st.invite_limits.max_expiry_secs as i64);
+    let expiry = req.expiry.min(max_expiry);
+
+    let slot_key = route_key_for(&req.invite_id);
+    let log_id = channel_log_id(&req.invite_id);
+    let revoke_token = random_token_128();
+    let revoke_hash = sha256_hex(&revoke_token);
+    let cap_hash = req.cap_hash.clone();
+    let max_slots = st.invite_limits.max_slots;
+
+    let outcome = {
+        let store = st.store.clone();
+        let (sk, lid) = (slot_key.clone(), log_id.clone());
+        match run_store(move || {
+            store.invite_create(
+                &sk,
+                &lid,
+                &cap_hash,
+                &revoke_hash,
+                &bundle,
+                &invite_sig,
+                expiry,
+                now,
+                max_slots,
+            )
+        })
+        .await
+        {
+            Ok(v) => v,
+            Err(code) => return (StatusCode::INTERNAL_SERVER_ERROR, code).into_response(),
+        }
+    };
+    match outcome {
+        InviteCreateOutcome::Created => {
+            info!(
+                "event=invite_created channel_id={} expiry={}",
+                log_id, expiry
+            );
+            (StatusCode::OK, Json(InviteCreateResp { revoke_token })).into_response()
+        }
+        InviteCreateOutcome::Duplicate => {
+            (StatusCode::CONFLICT, "ERR_INVITE_DUPLICATE").into_response()
+        }
+        InviteCreateOutcome::CapFull { live_slots } => {
+            info!(
+                "event=invite_cap_full live_slots={} max={}",
+                live_slots, max_slots
+            );
+            (StatusCode::TOO_MANY_REQUESTS, "ERR_INVITE_CAP_FULL").into_response()
+        }
+    }
+}
+
+async fn invite_redeem(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !auth_ok(&headers, st.relay_token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
+    }
+    let Ok(req) = serde_json::from_slice::<InviteRedeemReq>(&body) else {
+        return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
+    };
+    if req.invite_id.trim().is_empty() || req.cap.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
+    }
+    let slot_key = route_key_for(&req.invite_id);
+    let log_id = channel_log_id(&req.invite_id);
+    let now = now_unix_secs();
+    let ticket = random_token_128();
+    let ticket_hash = sha256_hex(&ticket);
+    // Hash the presented capability once, here, then hand the comparison to the
+    // store so it happens INSIDE the consume transaction. `ct_eq_secret` folds
+    // over a fixed 32-byte digest with no data-dependent early return (D-0014);
+    // reusing it introduces no new primitive.
+    let presented_hash = sha256_hex(&req.cap);
+
+    let outcome = {
+        let store = st.store.clone();
+        let (sk, th) = (slot_key.clone(), ticket_hash.clone());
+        match run_store(move || {
+            store.invite_redeem(&sk, now, &th, |stored| {
+                ct_eq_secret(&presented_hash, stored)
+            })
+        })
+        .await
+        {
+            Ok(v) => v,
+            Err(code) => return (StatusCode::INTERNAL_SERVER_ERROR, code).into_response(),
+        }
+    };
+    match outcome {
+        InviteRedeemOutcome::Redeemed { bundle, invite_sig } => {
+            info!("event=invite_redeemed channel_id={}", log_id);
+            (
+                StatusCode::OK,
+                Json(InviteRedeemResp {
+                    bundle_b64: b64_encode(&bundle),
+                    invite_sig_b64: b64_encode(&invite_sig),
+                    ticket,
+                }),
+            )
+                .into_response()
+        }
+        InviteRedeemOutcome::NotFound => {
+            (StatusCode::NOT_FOUND, "ERR_INVITE_NOT_FOUND").into_response()
+        }
+        InviteRedeemOutcome::Revoked => (StatusCode::GONE, "ERR_INVITE_REVOKED").into_response(),
+        InviteRedeemOutcome::Expired => (StatusCode::GONE, "ERR_INVITE_EXPIRED").into_response(),
+        InviteRedeemOutcome::AlreadyUsed => {
+            (StatusCode::CONFLICT, "ERR_INVITE_ALREADY_USED").into_response()
+        }
+        InviteRedeemOutcome::CapInvalid => {
+            (StatusCode::FORBIDDEN, "ERR_INVITE_CAP_INVALID").into_response()
+        }
+    }
+}
+
+async fn invite_revoke(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !auth_ok(&headers, st.relay_token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
+    }
+    let Ok(req) = serde_json::from_slice::<InviteRevokeReq>(&body) else {
+        return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
+    };
+    if req.invite_id.trim().is_empty() || req.revoke_token.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
+    }
+    let slot_key = route_key_for(&req.invite_id);
+    let log_id = channel_log_id(&req.invite_id);
+    let now = now_unix_secs();
+    let presented_hash = sha256_hex(&req.revoke_token);
+
+    let outcome = {
+        let store = st.store.clone();
+        let sk = slot_key.clone();
+        match run_store(move || {
+            store.invite_revoke(&sk, now, |stored| ct_eq_secret(&presented_hash, stored))
+        })
+        .await
+        {
+            Ok(v) => v,
+            Err(code) => return (StatusCode::INTERNAL_SERVER_ERROR, code).into_response(),
+        }
+    };
+    match outcome {
+        // Idempotent: a second revoke is a success, not an error.
+        InviteRevokeOutcome::Revoked | InviteRevokeOutcome::AlreadyRevoked => {
+            info!("event=invite_revoked channel_id={}", log_id);
+            (StatusCode::OK, Json(InviteRevokeResp { revoked: true })).into_response()
+        }
+        InviteRevokeOutcome::NotFound => {
+            (StatusCode::NOT_FOUND, "ERR_INVITE_NOT_FOUND").into_response()
+        }
+        InviteRevokeOutcome::TokenInvalid => {
+            (StatusCode::FORBIDDEN, "ERR_INVITE_REVOKE_INVALID").into_response()
+        }
+    }
 }
 
 // NA-0652 capability document (DOC-SRV-006). Served behind the same bearer
@@ -457,11 +914,18 @@ async fn server_info(State(st): State<AppState>, headers: HeaderMap) -> impl Int
             "server": "qsl-server",
             "version": env!("CARGO_PKG_VERSION"),
             "name": st.server_info.name.clone().unwrap_or_default(),
-            "api": ["push_v1", "pull_v1", "pull_ack_lease_v1"],
+            // ADDITIVE per DOC-SRV-006 rule 1: nothing removed, renamed or
+            // repurposed. `invite_v1` announces the NA-0678 slot routes.
+            "api": ["push_v1", "pull_v1", "pull_ack_lease_v1", "invite_v1"],
             "auth": { "mode": auth_mode },
             "limits": {
                 "max_body_bytes": st.limits.max_body_bytes,
                 "max_queue_depth": st.limits.max_queue_depth,
+                "max_invite_bundle_bytes": st.invite_limits.max_bundle_bytes,
+            },
+            "invite": {
+                "max_expiry_secs": st.invite_limits.max_expiry_secs,
+                "max_slots": st.invite_limits.max_slots,
             },
             "retention": { "ttl_secs": st.retention_ttl_secs },
             "directory": { "mode": "none" },
@@ -638,8 +1102,24 @@ async fn push_message(
         let payload = body.to_vec();
         let max_depth = st.limits.max_queue_depth;
         let max_routes = st.controls.max_route_count;
+        // NA-0678: the handshake ticket, if one was presented. Hashed here and
+        // compared constant-time inside the store transaction. For every route
+        // that is not an invite slot this value is never consulted.
+        let ticket_hash = headers
+            .get(INVITE_TICKET_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .map(sha256_hex);
         match run_store(move || {
-            store.enqueue(&key, &lid, &mid, &payload, now, max_depth, max_routes)
+            let verify = ticket_hash
+                .as_ref()
+                .map(|h| move |stored: &str| ct_eq_secret(h, stored));
+            let verify_ref: Option<&dyn Fn(&str) -> bool> =
+                verify.as_ref().map(|f| f as &dyn Fn(&str) -> bool);
+            store.enqueue(
+                &key, &lid, &mid, &payload, now, max_depth, max_routes, verify_ref,
+            )
         })
         .await
         {
@@ -663,6 +1143,17 @@ async fn push_message(
             );
             st.drop_rate_bucket(&route_key);
             return (StatusCode::TOO_MANY_REQUESTS, "ERR_ROUTE_CAP").into_response();
+        }
+        // Reachable ONLY for a route the invite system created. Every other
+        // route takes the paths above, unchanged.
+        EnqueueOutcome::SlotRejected(reason) => {
+            info!("event=invite_slot_rejected channel_id={}", log_id);
+            let (status, code) = match reason {
+                SlotReject::Expired => (StatusCode::GONE, "ERR_INVITE_EXPIRED"),
+                SlotReject::Revoked => (StatusCode::GONE, "ERR_INVITE_REVOKED"),
+                SlotReject::TicketInvalid => (StatusCode::FORBIDDEN, "ERR_INVITE_TICKET_INVALID"),
+            };
+            return (status, code).into_response();
         }
     }
 

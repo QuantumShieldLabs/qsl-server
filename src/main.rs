@@ -2,9 +2,12 @@ use std::{env, net::SocketAddr, time::Duration};
 
 use clap::Parser;
 use qsl_server::{
-    app, pull_lease_or_error, retention_ttl_or_error, AppState, Limits, ResourceControls,
-    StoreConfig, MAX_BODY_BYTES_CEILING, MAX_PUSH_RATE_BURST_CEILING, MAX_QUEUE_DEPTH_CEILING,
-    MAX_ROUTE_COUNT_CEILING, PULL_LEASE_SECS_DEFAULT, RETENTION_TTL_SECS_DEFAULT,
+    app, pull_lease_or_error, retention_ttl_or_error, AppState, InviteLimits, Limits,
+    ResourceControls, ServerInfoCfg, StoreConfig, INVITE_CREATE_BURST_DEFAULT,
+    INVITE_CREATE_REFILL_PER_SEC_DEFAULT, MAX_BODY_BYTES_CEILING, MAX_INVITE_BUNDLE_BYTES_DEFAULT,
+    MAX_INVITE_EXPIRY_SECS_DEFAULT, MAX_INVITE_SLOTS_DEFAULT, MAX_PUSH_RATE_BURST_CEILING,
+    MAX_QUEUE_DEPTH_CEILING, MAX_ROUTE_COUNT_CEILING, PULL_LEASE_SECS_DEFAULT,
+    RETENTION_TTL_SECS_DEFAULT,
 };
 use tokio::net::TcpListener;
 use tracing::info;
@@ -47,6 +50,21 @@ struct Cli {
     /// Ack-mode pull lease (visibility timeout) in seconds (env: PULL_LEASE_SECS, default: 60)
     #[arg(long)]
     pull_lease_secs: Option<usize>,
+    /// Max live invite slots (env: MAX_INVITE_SLOTS, default: 256)
+    #[arg(long)]
+    max_invite_slots: Option<usize>,
+    /// Max bytes per stored invite bundle or signature (env: MAX_INVITE_BUNDLE_BYTES, default: 16384)
+    #[arg(long)]
+    max_invite_bundle_bytes: Option<usize>,
+    /// Max invite lifetime in seconds (env: MAX_INVITE_EXPIRY_SECS, default: 259200)
+    #[arg(long)]
+    max_invite_expiry_secs: Option<usize>,
+    /// Global invite-create burst before rate limiting (env: INVITE_CREATE_BURST, default: 32)
+    #[arg(long)]
+    invite_create_burst: Option<usize>,
+    /// Global invite-create token refill per second; 0 disables refill (env: INVITE_CREATE_REFILL_PER_SEC, default: 1)
+    #[arg(long)]
+    invite_create_refill_per_sec: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +81,11 @@ struct EnvVals {
     store_path: Option<String>,
     retention_ttl_secs: Option<usize>,
     pull_lease_secs: Option<usize>,
+    max_invite_slots: Option<usize>,
+    max_invite_bundle_bytes: Option<usize>,
+    max_invite_expiry_secs: Option<usize>,
+    invite_create_burst: Option<usize>,
+    invite_create_refill_per_sec: Option<usize>,
 }
 
 impl EnvVals {
@@ -79,6 +102,11 @@ impl EnvVals {
             store_path: env_opt("STORE_PATH"),
             retention_ttl_secs: env_usize("RETENTION_TTL_SECS")?,
             pull_lease_secs: env_usize("PULL_LEASE_SECS")?,
+            max_invite_slots: env_usize("MAX_INVITE_SLOTS")?,
+            max_invite_bundle_bytes: env_usize("MAX_INVITE_BUNDLE_BYTES")?,
+            max_invite_expiry_secs: env_usize("MAX_INVITE_EXPIRY_SECS")?,
+            invite_create_burst: env_usize("INVITE_CREATE_BURST")?,
+            invite_create_refill_per_sec: env_usize("INVITE_CREATE_REFILL_PER_SEC")?,
         })
     }
 }
@@ -90,6 +118,7 @@ struct Config {
     limits: Limits,
     controls: ResourceControls,
     store: StoreConfig,
+    invites: InviteLimits,
     deprecated_route_idle_ttl: bool,
 }
 
@@ -159,6 +188,23 @@ fn resolve_config(cli: Cli, env: EnvVals) -> Result<Config, String> {
             .or(env.pull_lease_secs)
             .unwrap_or(PULL_LEASE_SECS_DEFAULT),
     )?;
+    let invites = InviteLimits::new(
+        cli.max_invite_slots
+            .or(env.max_invite_slots)
+            .unwrap_or(MAX_INVITE_SLOTS_DEFAULT),
+        cli.max_invite_bundle_bytes
+            .or(env.max_invite_bundle_bytes)
+            .unwrap_or(MAX_INVITE_BUNDLE_BYTES_DEFAULT),
+        cli.max_invite_expiry_secs
+            .or(env.max_invite_expiry_secs)
+            .unwrap_or(MAX_INVITE_EXPIRY_SECS_DEFAULT),
+        cli.invite_create_burst
+            .or(env.invite_create_burst)
+            .unwrap_or(INVITE_CREATE_BURST_DEFAULT),
+        cli.invite_create_refill_per_sec
+            .or(env.invite_create_refill_per_sec)
+            .unwrap_or(INVITE_CREATE_REFILL_PER_SEC_DEFAULT),
+    )?;
     let deprecated_route_idle_ttl =
         cli.route_idle_ttl_ms.is_some() || env.route_idle_ttl_ms_present;
     Ok(Config {
@@ -175,6 +221,7 @@ fn resolve_config(cli: Cli, env: EnvVals) -> Result<Config, String> {
             retention_ttl_secs,
             pull_lease_secs,
         },
+        invites,
         deprecated_route_idle_ttl,
     })
 }
@@ -227,7 +274,14 @@ async fn main() {
         }
     };
 
-    let state = match AppState::new_with_controls_and_store(cfg.limits, cfg.controls, cfg.store) {
+    let state = match AppState::new_full(
+        cfg.limits,
+        cfg.controls,
+        std::env::var("RELAY_TOKEN").ok().filter(|v| !v.is_empty()),
+        cfg.store,
+        ServerInfoCfg::from_env(),
+        cfg.invites,
+    ) {
         Ok(v) => v,
         Err(code) => {
             tracing::error!("{code}");
@@ -270,6 +324,11 @@ mod cli_tests {
             store_path: Some(":memory:".to_string()),
             retention_ttl_secs: None,
             pull_lease_secs: None,
+            max_invite_slots: None,
+            max_invite_bundle_bytes: None,
+            max_invite_expiry_secs: None,
+            invite_create_burst: None,
+            invite_create_refill_per_sec: None,
         }
     }
 
@@ -286,6 +345,11 @@ mod cli_tests {
             store_path: None,
             retention_ttl_secs: None,
             pull_lease_secs: None,
+            max_invite_slots: None,
+            max_invite_bundle_bytes: None,
+            max_invite_expiry_secs: None,
+            invite_create_burst: None,
+            invite_create_refill_per_sec: None,
         }
     }
 
