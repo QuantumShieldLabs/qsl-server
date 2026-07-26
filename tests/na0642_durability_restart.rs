@@ -1,9 +1,23 @@
-// NA-0642 restart-durability proof, operator-required form: the relay process
-// is HARD-KILLED (SIGKILL via Child::kill on unix — no graceful shutdown, no
-// flush-on-exit) between the push 200 and the restart, so surviving the
-// restart demonstrates the synchronous=FULL fsync guarantee, not a graceful
-// flush. Same discipline for the crash-between-pull-and-ack case: the server
-// dies mid-lease and the leased message must reappear after lease expiry.
+// NA-0642 restart-durability proof: the relay process is HARD-KILLED (SIGKILL
+// via Child::kill on unix — no graceful shutdown, no flush-on-exit) between the
+// push 200 and the restart, so surviving the restart demonstrates PROCESS-CRASH
+// durability, not a graceful flush. Same discipline for the
+// crash-between-pull-and-ack case: the server dies mid-lease and the leased
+// message must reappear after lease expiry.
+//
+// ⚠ COMMENT CORRECTED at NA-0678 (D614 C2/F4). This header previously claimed
+// the file demonstrates "the synchronous=FULL fsync guarantee". It cannot, and
+// the correction matters because that claim was cited as the project's proof of
+// "a 200 means fsynced". SIGKILL destroys a PROCESS, not the OS page cache:
+// writes that reached the kernel survive a process kill and are visible to the
+// next process that opens the file, so synchronous=FULL and synchronous=OFF are
+// INDISTINGUISHABLE to any process-kill test. Measured, not argued: this suite
+// passes 3/3 with the pragma set to OFF.
+//
+// The tests below are correct and valuable for what they actually prove, and
+// are deliberately unchanged. The fsync claim is discharged instead by
+// tests/na0678_invite_durability.rs, which counts real fsync syscalls and
+// asserts the fsync precedes the 200 on the wire.
 
 use serde::Deserialize;
 use std::{

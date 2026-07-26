@@ -17,6 +17,12 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 - Canonical pull: `GET /v1/pull?max=N` with `X-QSL-Route-Token: <token>` -> JSON `{ "items": [ { "id": "<msg_id>", "data": [<byte>, ...] }, ... ] }` (200) or 204 if empty
 - Optional `X-Msg-Id` supplies an opaque message identifier. It is not an idempotency key: duplicate values are accepted as separate queued messages. Accepted message IDs are logged as non-secret operational metadata, so clients must not put secrets in this header.
 - Legacy path-token routes are retired. `POST /v1/push/{channel}` and `GET /v1/pull/{channel}?max=N` are no longer supported because they carry the route token in the request URI.
+- Invite slots (NA-0678): `POST /v1/invite/create`, `POST /v1/invite/redeem`, `POST /v1/invite/revoke`. All three are POSTs carrying `invite_id` and any secret in the JSON **body** — never in a path or query parameter, for the same reason the legacy route-token paths above were retired.
+  - `create` accepts `{invite_id, cap_hash, expiry, bundle_b64, invite_sig_b64}` and returns `{revoke_token}`. The **client** mints the capability and uploads only its SHA-256; the relay never holds a capability in plaintext before a redeemer presents one, and **there is no mint endpoint**.
+  - `redeem` accepts `{invite_id, cap}` and returns `{bundle_b64, invite_sig_b64, ticket}`. Consumption is an atomic compare-and-set: exactly one redemption of a slot can win, and every other gets `ERR_INVITE_ALREADY_USED`.
+  - `revoke` accepts `{invite_id, revoke_token}` and is idempotent.
+  - The `ticket` is a **one-shot** credential for the handshake push: `POST /v1/push` to an invite slot requires `X-QSL-Invite-Ticket`. Pushes to routes that are not invite slots are unaffected.
+  - The relay stores `bundle` and `invite_sig` as **opaque bytes** and never parses them. Consumed and revoked slots are **tombstoned until expiry** (blobs cleared) so that "already used" stays distinguishable from "never existed".
 
 ## Behavior and limits
 - `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`
@@ -28,6 +34,9 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 - Missing limit values use defaults. Non-numeric values fail startup with deterministic config errors. Zero values fail startup for `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, `PUSH_RATE_BURST`, and `ROUTE_IDLE_TTL_MS`; `PUSH_RATE_REFILL_PER_SEC=0` is allowed for deterministic no-refill operation. Values above the built-in ceilings are capped.
 - `RELAY_TOKEN` is optional. When set, canonical push/pull require `Authorization: Bearer <token>` and reject missing or invalid bearer tokens with 401 `ERR_UNAUTHORIZED` before mutating queues. When unset or empty, relay auth is disabled and route-token header checks still apply.
 - Unknown pulls return 204 without creating route slots. Draining a route to empty removes the live slot, releasing global route capacity and per-route rate accounting.
+- `MAX_INVITE_SLOTS` (default 256, ceiling 4096) caps live invite slots; beyond it, `create` returns 429 + `ERR_INVITE_CAP_FULL` and **never evicts an existing slot** — an eviction path would let an attacker delete other people's invites.
+- `INVITE_CREATE_BURST` (default 32) and `INVITE_CREATE_REFILL_PER_SEC` (default 1, `0` allowed) provide a **global** invite-create token bucket returning 429 + `ERR_RATE_LIMITED`. It is global rather than per-route because an invite has no route token until it exists. The cap and the bucket are both required and are not substitutes: the cap bounds storage, the bucket bounds denial.
+- `MAX_INVITE_BUNDLE_BYTES` (default 16384, ceiling 65536) → 413 + `ERR_INVITE_TOO_LARGE`. `MAX_INVITE_EXPIRY_SECS` (default 259200 = 72 h, ceiling 30 days) clamps a requested expiry to what this relay offers.
 - Rate and global route-cap controls are minimal local in-app hardening primitives. They do not approve production deployment, and reverse proxy / edge rate limiting remains a separate deployment layer.
 
 ## Run (local)
