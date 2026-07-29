@@ -4,7 +4,7 @@ Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and m
 
 ## Public posture and licensing
 - Source in this repository is public and licensed under `AGPL-3.0-only`; see `LICENSE`.
-- This repository contains the public relay code and operator documentation for the transport-only server boundary.
+- This repository contains the public relay code and operator documentation for the transport-only relay boundary.
 - Any separate commercial services or support offerings would be distinct from this repository and do not replace the AGPL terms for the source published here.
 
 ## Invariants
