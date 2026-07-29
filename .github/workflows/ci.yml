@@ -23,10 +23,65 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets -q -- -D warnings
 
-  # NA-0677 / D613. ⚠ ADVISORY UNTIL BRANCH PROTECTION CHANGES: this repository
-  # requires exactly one status context, `rust`. The two jobs below RUN and
-  # REPORT on every PR, but they cannot block a merge until the operator adds
-  # them to the required set. Green is not the same as blocking.
+  # NA-0686 ADDENDUM (D-1325, OBS-C first half). THE SPLIT.
+  #
+  # ⚠ WHY A SEPARATE CONTEXT AT ALL. Until now the literal scan reported under
+  # the name `public-safety`, so an operator-infrastructure literal and a leaked
+  # private key FAILED AS THE SAME WORD. At the branch-protection layer the two
+  # causes were indistinguishable: a reviewer saw "public-safety failed" and
+  # could not tell whether a secret had escaped or a hostname had, without
+  # opening the log. That is the same defect class as ENG-0082 (401 and 403
+  # collapsing to one marker), one layer out. Distinct causes get distinct words.
+  #
+  # The job name, the step names and their order are byte-consistent with
+  # `qsl-protocol`'s `infra-literal-scan.yml`, so all four repositories report
+  # this gate under one name and old lane records keep reading true.
+  infra-literal-scan:
+    name: infra-literal-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # The scan's refusal to report a pass over an empty input -- "NOTHING
+      # EXAMINED", exit 2 -- is correct behaviour that nothing proved until
+      # NA-0686 guarded it. The selftest runs FIRST so a broken instrument fails
+      # before it can report clean.
+      - name: infra-literal scan SELFTEST (the gate's own controls)
+        run: python3 scripts/ci/infra_literal_scan_selftest.py
+      - name: infra-literal scan (Tier 1, whole tracked tree)
+        run: python3 scripts/ci/infra_literal_scan.py --mode tree
+      - name: infra-literal scan (Tier 2b, added lines)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          python3 scripts/ci/infra_literal_scan.py --mode diff --base "origin/${{ github.base_ref }}"
+
+  # NA-0686 ADDENDUM (D-1325). ⚠ THE PREVIOUS NOTE HERE WAS STALE AND SAID THE
+  # OPPOSITE OF THE TRUTH. It read "ADVISORY UNTIL BRANCH PROTECTION CHANGES ...
+  # this repository requires exactly one status context, `rust`". Measured
+  # 2026-07-29 against live branch protection: this repository requires THREE --
+  # `advisories`, `public-safety` and `rust` -- so both jobs below have been
+  # BLOCKING for some time. A comment that understates a gate is worse than none,
+  # because it invites someone to merge past a red they were told was advisory.
+  #
+  # ⚠ WHAT IS ACTUALLY ADVISORY IS THE NEW `infra-literal-scan` CONTEXT ABOVE:
+  # it runs and reports on every PR, but it is NOT in the required set yet, and
+  # this lane did not put it there -- branch protection is operator-only.
+  #
+  # ⚠ AND THE SCAN IS DELIBERATELY STILL RUN HERE TOO, WHICH IS NOT AN OVERSIGHT.
+  # `public-safety` is a REQUIRED context whose entire content is this scan, so
+  # moving the steps out would leave a required context that never reports --
+  # and a required context that never reports BLOCKS EVERY PULL REQUEST
+  # INDEFINITELY (the NA-0653 failure). Duplicating a scan that examines a few
+  # dozen files for one transition is cheap; stranding a repository is not.
+  #
+  # THE SEQUENCE, so the follow-up is not guesswork:
+  #   1. this PR merges; `infra-literal-scan` reports on `main` at least once;
+  #   2. the OPERATOR adds `infra-literal-scan` to the required set and removes
+  #      `public-safety` from it;
+  #   3. a later lane deletes this now-redundant job.
+  # Step 2 is deliberately not automated and not this lane's to make.
   public-safety:
     name: public-safety
     runs-on: ubuntu-latest
