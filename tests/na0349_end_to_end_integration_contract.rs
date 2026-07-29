@@ -1,13 +1,12 @@
 use qsl_server::{app, AppState, Limits, ResourceControls};
 use reqwest::StatusCode as ReqStatus;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    io::Write,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
 use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
+
+mod common;
+use common::{await_logs, capture};
 
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
 const MSG_ID_HEADER: &str = "X-Msg-Id";
@@ -21,34 +20,6 @@ const PAYLOAD_SENTINEL: &str = "NA0349_ATTACHMENT_PAYLOAD_SENTINEL_MUST_NOT_LEAK
 const QSHIELD_DEMO_SMALL_CLASSES: [u64; 12] = [
     256, 512, 768, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192,
 ];
-
-#[derive(Clone)]
-struct SharedWriter(Arc<Mutex<Vec<u8>>>);
-
-impl SharedWriter {
-    fn new() -> Self {
-        Self(Arc::new(Mutex::new(Vec::new())))
-    }
-
-    fn text(&self) -> String {
-        let bytes = self.0.lock().unwrap_or_else(|e| panic!("{e}")).clone();
-        String::from_utf8(bytes).unwrap_or_else(|e| panic!("{e}"))
-    }
-}
-
-impl Write for SharedWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| panic!("{e}"))
-            .extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct AttachmentDescriptor {
@@ -258,12 +229,9 @@ fn emit_marker(marker: &str) {
 
 #[tokio::test(flavor = "current_thread")]
 async fn na0349_qsl_server_qsl_attachments_contract_model_is_end_to_end_bounded() {
-    let logs = SharedWriter::new();
+    let (logs, writer) = capture();
     let subscriber = tracing_subscriber::fmt()
-        .with_writer({
-            let logs = logs.clone();
-            move || logs.clone()
-        })
+        .with_writer(move || writer.clone())
         .with_ansi(false)
         .with_max_level(tracing::Level::INFO)
         .finish();
@@ -401,7 +369,9 @@ async fn na0349_qsl_server_qsl_attachments_contract_model_is_end_to_end_bounded(
         AttachmentFetch::Unknown
     );
 
-    let text = logs.text();
+    // NA-0687: synchronise on the relay's own log lines before reading. Every
+    // absence assertion below is measured against the snapshot this returns.
+    let text = await_logs(&logs, &["channel_id=", "NA0349_ATTACHMENT_DESCRIPTOR"]).await;
     assert!(text.contains("channel_id="));
     assert!(text.contains("NA0349_ATTACHMENT_DESCRIPTOR"));
     for secret in [

@@ -19,8 +19,6 @@
 //  - the create-rate bucket and the slot cap, which are NOT substitutes.
 //  - no /v1/invite/mint route exists.
 
-use std::sync::{Arc, Mutex};
-
 use qsl_server::{
     app, AppState, InviteLimits, Limits, ResourceControls, ServerInfoCfg, StoreConfig,
 };
@@ -29,24 +27,11 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
 
+mod common;
+use common::{await_log, capture};
+
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
 const TICKET_HEADER: &str = "X-QSL-Invite-Ticket";
-
-#[derive(Clone)]
-struct SharedWriter(Arc<Mutex<Vec<u8>>>);
-
-impl std::io::Write for SharedWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| panic!("{e}"))
-            .extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 
 async fn spawn(
     relay_token: Option<String>,
@@ -516,8 +501,7 @@ async fn non_slot_routes_are_completely_unaffected() {
 
 #[tokio::test]
 async fn bundle_is_opaque_bytes_in_bytes_out_and_never_logged() {
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let w = SharedWriter(buf.clone());
+    let (buf, w) = capture();
     let sub = tracing_subscriber::fmt()
         .with_ansi(false)
         .with_writer(move || w.clone())
@@ -552,8 +536,11 @@ async fn bundle_is_opaque_bytes_in_bytes_out_and_never_logged() {
     );
     assert_eq!(unb64(d["invite_sig_b64"].as_str().unwrap()), sig);
 
+    // NA-0687: this is ENG-0091 instance 1, measured RED at full parallelism. Await
+    // the relay's redacted-id line BEFORE aborting -- the two absence assertions below
+    // must be measured against a populated buffer, never a racy empty one.
+    let logged = await_log(&buf, "channel_id=").await;
     h.abort();
-    let logged = String::from_utf8_lossy(&buf.lock().unwrap_or_else(|e| panic!("{e}"))).to_string();
     assert!(
         !logged.contains("inv-opaque"),
         "raw invite_id must not be logged"

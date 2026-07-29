@@ -1,45 +1,16 @@
 use qsl_server::{app, AppState, Limits, ResourceControls};
 use reqwest::StatusCode as ReqStatus;
 use serde::Deserialize;
-use std::{
-    io::Write,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
+
+mod common;
+use common::{await_logs, capture};
 
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
 const MSG_ID_HEADER: &str = "X-Msg-Id";
 const AUTH_HEADER: &str = "Authorization";
-
-#[derive(Clone)]
-struct SharedWriter(Arc<Mutex<Vec<u8>>>);
-
-impl SharedWriter {
-    fn new() -> Self {
-        Self(Arc::new(Mutex::new(Vec::new())))
-    }
-
-    fn text(&self) -> String {
-        let bytes = self.0.lock().unwrap_or_else(|e| panic!("{e}")).clone();
-        String::from_utf8(bytes).unwrap_or_else(|e| panic!("{e}"))
-    }
-}
-
-impl Write for SharedWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| panic!("{e}"))
-            .extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 
 #[derive(Deserialize)]
 struct PullItem {
@@ -320,12 +291,9 @@ async fn na0347_quota_rate_retention_purge_and_backup_boundaries_are_bounded() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn na0347_secret_env_public_ingress_and_log_redaction_boundaries_hold() {
-    let logs = SharedWriter::new();
+    let (logs, writer) = capture();
     let subscriber = tracing_subscriber::fmt()
-        .with_writer({
-            let logs = logs.clone();
-            move || logs.clone()
-        })
+        .with_writer(move || writer.clone())
         .with_ansi(false)
         .with_max_level(tracing::Level::INFO)
         .finish();
@@ -358,7 +326,15 @@ async fn na0347_secret_env_public_ingress_and_log_redaction_boundaries_hold() {
     let body: PullResp = delivered.json().await.unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(body.items.len(), 1);
 
-    let text = logs.text();
+    // NA-0687: this is ENG-0091 instance 2 -- the failure that blocked a merge, and
+    // one of the two measured RED at full parallelism in this lane's M2 run 3. Await
+    // the relay's own log lines, then assert; the three absence assertions below are
+    // then measured against a demonstrably populated buffer.
+    let text = await_logs(
+        &logs,
+        &["channel_id=", "NA0347_LOG_MSG_ID_NONSECRET_METADATA"],
+    )
+    .await;
     assert!(text.contains("channel_id="));
     assert!(text.contains("NA0347_LOG_MSG_ID_NONSECRET_METADATA"));
     assert!(!text.contains(route_token));
