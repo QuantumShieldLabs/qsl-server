@@ -9,13 +9,14 @@ use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
 
 mod common;
-use common::{await_logs, capture};
+use common::{await_logs, capture, install_permissive_global_once};
 
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
 const MSG_ID_HEADER: &str = "X-Msg-Id";
 
 #[tokio::test(flavor = "current_thread")]
 async fn retention_cleanup_logs_redact_route_auth_payload() {
+    install_permissive_global_once();
     let (buf, writer) = capture();
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)

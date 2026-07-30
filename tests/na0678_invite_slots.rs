@@ -28,7 +28,7 @@ use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
 
 mod common;
-use common::{await_log, capture};
+use common::{await_log, capture, install_permissive_global_once};
 
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
 const TICKET_HEADER: &str = "X-QSL-Invite-Ticket";
@@ -501,6 +501,7 @@ async fn non_slot_routes_are_completely_unaffected() {
 
 #[tokio::test]
 async fn bundle_is_opaque_bytes_in_bytes_out_and_never_logged() {
+    install_permissive_global_once();
     let (buf, w) = capture();
     let sub = tracing_subscriber::fmt()
         .with_ansi(false)

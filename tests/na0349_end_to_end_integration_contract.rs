@@ -6,7 +6,7 @@ use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
 
 mod common;
-use common::{await_logs, capture};
+use common::{await_logs, capture, install_permissive_global_once};
 
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
 const MSG_ID_HEADER: &str = "X-Msg-Id";
@@ -229,6 +229,7 @@ fn emit_marker(marker: &str) {
 
 #[tokio::test(flavor = "current_thread")]
 async fn na0349_qsl_server_qsl_attachments_contract_model_is_end_to_end_bounded() {
+    install_permissive_global_once();
     let (logs, writer) = capture();
     let subscriber = tracing_subscriber::fmt()
         .with_writer(move || writer.clone())

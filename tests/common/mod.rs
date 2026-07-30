@@ -83,6 +83,79 @@ pub fn log_text(buf: &LogBuf) -> String {
     String::from_utf8_lossy(&bytes).to_string()
 }
 
+/// How much captured text the timeout message quotes back. Bounded so a large buffer
+/// cannot flood a CI log.
+pub const LOG_EXCERPT_BYTES: usize = 240;
+
+/// A bounded, single-line excerpt of what the buffer actually held.
+///
+/// ⚠ NA-0687 / D-1326, operator-authorised: reporting the buffer's SIZE told us that a
+/// timeout over an EMPTY buffer and one over a POPULATED buffer are different defects —
+/// but it could not say WHICH line arrived, and that is what identifies the mechanism.
+/// PR #69's CI red reported `83 bytes, 1 lines` and the identity of that one line would
+/// have settled the diagnosis on the spot instead of requiring a five-arm experiment.
+///
+/// ⚠ TEST-DATA SURFACE ONLY. What this quotes is captured relay log output inside a test
+/// process — the same text the surrounding assertions already read in full, and the
+/// relay's own redaction is what keeps secrets out of it (that is the property these
+/// tests exist to verify). It is bounded, newlines are flattened so the panic stays
+/// greppable, and it must never be pointed at anything but a test capture buffer.
+fn excerpt(text: &str) -> String {
+    let flat = text.replace('\n', " | ");
+    if flat.len() <= LOG_EXCERPT_BYTES {
+        flat
+    } else {
+        let mut cut = LOG_EXCERPT_BYTES;
+        while cut > 0 && !flat.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}…<truncated>", &flat[..cut])
+    }
+}
+
+/// Install a permissive process-global default subscriber, once per test binary, that
+/// **discards every event it is given**.
+///
+/// ⚠ THIS IS NOT THE CAPTURE. Capture is still each site's own thread-local
+/// `set_default`. This exists solely to keep **process-global filter state** permissive,
+/// and it is ruled on measurement, not on theory (NA-0687 Phase 5b, D-1326).
+///
+/// The measured matrix, 20 runs per arm on a reproducer of the exposure pattern
+/// (15 sibling tests driving a shared callsite with no subscriber + 1 capture test):
+///
+/// | arm | mechanism | red / 20 |
+/// |---|---|---|
+/// | base | `set_default` alone | **16** |
+/// | D3 | `set_default` + `rebuild_interest_cache()` | **19** |
+/// | D2 | `WithSubscriber` on the emitting future | **20** |
+/// | D1 | global default carrying data + thread-local routing | **0** |
+/// | **D4 (this)** | permissive global to `io::sink` + unchanged `set_default` | **0** |
+///
+/// ⚠ D2's and D3's reds falsified BOTH hypotheses the lane wrote down in advance —
+/// thread-local dispatcher visibility, and stale per-callsite `Interest` a rebuild
+/// repairs. **D4 is decisive because this subscriber discards everything**: it cannot be
+/// doing any capturing, so the only thing it can have changed is process-global filter
+/// state. The account of the internals stays INFERENCE; the five outcomes above do not.
+///
+/// D1 measured identically and was rejected on blast radius: it would route every event
+/// in the binary through one writer and rely on per-thread bookkeeping to keep tests
+/// apart. This one throws everything away, so it **cannot** capture, leak or misroute,
+/// and if it ever stops working the flake returns **loudly** as `LOG_SYNC_TIMEOUT`.
+pub fn install_permissive_global_once() {
+    static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        let sub = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(std::io::sink)
+            .finish();
+        // Ignored deliberately: another global default already being set is not this
+        // helper's business to police, and `control_d4_*` is what fails loudly if the
+        // global ends up absent or restrictive.
+        let _ = tracing::subscriber::set_global_default(sub);
+    });
+}
+
 /// Why a wait ended without its needle.
 #[derive(Debug)]
 pub enum LogWaitError {
@@ -96,6 +169,10 @@ pub enum LogWaitError {
         waited_ms: u64,
         bytes: usize,
         lines: usize,
+        /// A bounded, single-line quote of what the buffer DID hold. Size alone says
+        /// "empty" vs "populated"; this says WHICH line arrived, which is what names
+        /// the mechanism.
+        excerpt: String,
     },
 }
 
@@ -107,10 +184,11 @@ impl std::fmt::Display for LogWaitError {
                 waited_ms,
                 bytes,
                 lines,
+                excerpt,
             } => write!(
                 f,
                 "LOG_SYNC_TIMEOUT: needle {needle:?} not observed within {waited_ms}ms \
-                 (buffer {bytes} bytes, {lines} lines)"
+                 (buffer {bytes} bytes, {lines} lines) buffer_excerpt={excerpt:?}"
             ),
         }
     }
@@ -134,6 +212,7 @@ pub async fn try_await_log(buf: &LogBuf, needle: &str) -> Result<String, LogWait
                 waited_ms: start.elapsed().as_millis() as u64,
                 bytes: text.len(),
                 lines: text.lines().count(),
+                excerpt: excerpt(&text),
             });
         }
         tokio::time::sleep(LOG_WAIT_POLL).await;

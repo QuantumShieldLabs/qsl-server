@@ -6,7 +6,7 @@ use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
 
 mod common;
-use common::{await_logs, capture};
+use common::{await_logs, capture, install_permissive_global_once};
 
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
 
@@ -374,6 +374,7 @@ async fn legacy_routes_404_without_mutating_or_consuming() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn logs_do_not_leak_route_auth_or_payload_on_success_or_rejects() {
+    install_permissive_global_once();
     let (buf, writer) = capture();
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)

@@ -1345,7 +1345,42 @@ mod tests {
                 waited_ms: u64,
                 bytes: usize,
                 lines: usize,
+                excerpt: String,
             },
+        }
+
+        /// Bounded so a large buffer cannot flood a CI log. TEST-DATA SURFACE ONLY:
+        /// this quotes captured relay log output inside a test process -- the same text
+        /// the surrounding assertions already read in full.
+        pub const LOG_EXCERPT_BYTES: usize = 240;
+
+        fn excerpt(text: &str) -> String {
+            let flat = text.replace('\n', " | ");
+            if flat.len() <= LOG_EXCERPT_BYTES {
+                flat
+            } else {
+                let mut cut = LOG_EXCERPT_BYTES;
+                while cut > 0 && !flat.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                format!("{}\u{2026}<truncated>", &flat[..cut])
+            }
+        }
+
+        /// NA-0687 Phase 5b arm D4, ruled on measurement (see `tests/common/mod.rs` for
+        /// the full matrix): a permissive process-global default that DISCARDS everything,
+        /// installed once per binary, purely to keep process-global filter state
+        /// permissive. It is NOT the capture -- `set_default` below still does that.
+        pub fn install_permissive_global_once() {
+            static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            ONCE.get_or_init(|| {
+                let sub = tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .with_max_level(tracing::Level::TRACE)
+                    .with_writer(std::io::sink)
+                    .finish();
+                let _ = tracing::subscriber::set_global_default(sub);
+            });
         }
 
         impl std::fmt::Display for LogWaitError {
@@ -1356,10 +1391,12 @@ mod tests {
                         waited_ms,
                         bytes,
                         lines,
+                        excerpt,
                     } => write!(
                         f,
                         "LOG_SYNC_TIMEOUT: needle {needle:?} not observed within \
-                         {waited_ms}ms (buffer {bytes} bytes, {lines} lines)"
+                         {waited_ms}ms (buffer {bytes} bytes, {lines} lines) \
+                         buffer_excerpt={excerpt:?}"
                     ),
                 }
             }
@@ -1378,6 +1415,7 @@ mod tests {
                         waited_ms: start.elapsed().as_millis() as u64,
                         bytes: text.len(),
                         lines: text.lines().count(),
+                        excerpt: excerpt(&text),
                     });
                 }
                 tokio::time::sleep(LOG_WAIT_POLL).await;
@@ -1406,7 +1444,7 @@ mod tests {
             text
         }
     }
-    use self::log_sync::{await_log, await_logs, capture};
+    use self::log_sync::{await_log, await_logs, capture, install_permissive_global_once};
 
     /// THIS COPY'S OWN CONTROL (NA-0687 §8, the C-equivalent for the duplicated
     /// helper). The wait must be BOUNDED, must fail with a NAMED error, and must report
@@ -1415,6 +1453,7 @@ mod tests {
     /// defect class this lane exists to close.
     #[tokio::test]
     async fn log_sync_timeout_is_named_and_reports_what_it_read() {
+        install_permissive_global_once();
         let (buf, writer) = capture();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
@@ -1438,6 +1477,18 @@ mod tests {
         assert!(
             err.to_string().contains("LOG_SYNC_TIMEOUT"),
             "the failure must be NAMED, not anonymous: {err}"
+        );
+
+        // NA-0687 Phase 5b (D4): this copy's guard for the FIX's own failure mode. If the
+        // permissive process-global default is ever absent or restrictive, capture is not
+        // wired at all and these three sites silently revert to the shape that flaked.
+        assert!(
+            tracing::dispatcher::has_been_set(),
+            "no process-global default subscriber: capture is NOT wired"
+        );
+        assert!(
+            tracing::level_filters::LevelFilter::current() >= tracing::Level::INFO,
+            "the process-global max level would drop the relay's INFO lines"
         );
     }
 
@@ -1615,6 +1666,7 @@ mod tests {
 
     #[tokio::test]
     async fn payload_not_logged() {
+        install_permissive_global_once();
         let (buf, writer) = capture();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
@@ -1657,6 +1709,7 @@ mod tests {
 
     #[tokio::test]
     async fn logs_do_not_contain_raw_channel() {
+        install_permissive_global_once();
         let (buf, writer) = capture();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
@@ -1688,6 +1741,7 @@ mod tests {
 
     #[tokio::test]
     async fn overload_logs_are_safe_and_structured() {
+        install_permissive_global_once();
         let (buf, writer) = capture();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)

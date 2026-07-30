@@ -24,7 +24,10 @@
 
 mod common;
 
-use common::{await_log, capture, gated_capture, log_text, try_await_log, LogWaitError};
+use common::{
+    await_log, capture, gated_capture, install_permissive_global_once, log_text, try_await_log,
+    LogWaitError,
+};
 use std::time::{Duration, Instant};
 use tracing::subscriber::set_default;
 
@@ -114,6 +117,7 @@ async fn control_c_never_released_reports_the_named_timeout_over_an_empty_buffer
         waited_ms,
         bytes,
         lines,
+        excerpt,
     } = &err;
     assert_eq!(needle, NEEDLE);
     assert!(
@@ -128,6 +132,12 @@ async fn control_c_never_released_reports_the_named_timeout_over_an_empty_buffer
     assert!(
         err.to_string().contains("LOG_SYNC_TIMEOUT"),
         "the failure must be NAMED, not anonymous: {err}"
+    );
+    // The excerpt of an empty buffer is empty -- and saying so is the point: "nothing
+    // was ever captured" must read differently from "the wrong thing was captured".
+    assert!(
+        excerpt.is_empty(),
+        "an unreleased gate leaves nothing to quote: {excerpt:?}"
     );
 }
 
@@ -148,7 +158,12 @@ async fn control_c2_a_populated_buffer_times_out_with_its_size_reported() {
         Err(e) => e,
     };
 
-    let LogWaitError::Timeout { bytes, lines, .. } = &err;
+    let LogWaitError::Timeout {
+        bytes,
+        lines,
+        excerpt,
+        ..
+    } = &err;
     // ⚠ THIS is the distinction that stops a vacuous pass being indistinguishable
     // from a real one: the timeout reports a POPULATED buffer, so "nothing emitted"
     // and "the wrong thing emitted" are different diagnoses at a glance.
@@ -158,4 +173,45 @@ async fn control_c2_a_populated_buffer_times_out_with_its_size_reported() {
     );
     assert!(*lines >= 1);
     assert!(err.to_string().contains("LOG_SYNC_TIMEOUT"));
+    // ⚠ THE EXCERPT IS THE PART THAT NAMES THE MECHANISM. Size distinguishes empty from
+    // populated; only the content says WHICH line arrived. PR #69's CI red reported
+    // `83 bytes, 1 lines` and could not answer that question, which cost a five-arm
+    // experiment to answer instead.
+    assert!(
+        excerpt.contains("event=something_else"),
+        "the excerpt must quote the line that DID arrive: {excerpt:?}"
+    );
+}
+
+// ============================ CONTROL D4 — THE FIX'S OWN FAILURE MODE ============
+//
+// Controls A/A'/B/C/C2 above all guard the OLD defect: reading before the writer emitted.
+// This one guards the NEW mechanism the Phase 5b matrix ruled in (D4): capture depends on
+// a permissive process-global default existing. If that global is ever absent or
+// restrictive -- a future test installing its own global first, a call site forgetting the
+// installer, a dependency changing the default filter -- then **capture is not wired at
+// all**, and every site in this repository silently reverts to the shape that flakes.
+//
+// ⚠ THE POINT: without this test, that regression would surface only as the ORIGINAL
+// defect returning at random on a runner, which is exactly the state this lane was opened
+// to end. A fix needs a control for ITS failure mode, not only for the one it replaced.
+
+#[test]
+fn control_d4_the_permissive_global_is_installed_and_permissive() {
+    install_permissive_global_once();
+
+    assert!(
+        tracing::dispatcher::has_been_set(),
+        "no process-global default subscriber is set: capture is NOT wired, and every \
+         log-capture site in this repository has silently reverted to the shape that \
+         flaked 16 of 20 times in the Phase 5b base arm"
+    );
+
+    let current = tracing::level_filters::LevelFilter::current();
+    assert!(
+        current >= tracing::Level::INFO,
+        "process-global max level is {current:?}, which would drop the relay's INFO log \
+         lines before any dispatcher sees them -- capture is not wired even though a \
+         global default exists"
+    );
 }

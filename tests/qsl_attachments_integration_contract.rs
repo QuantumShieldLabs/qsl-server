@@ -6,7 +6,7 @@ use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
 
 mod common;
-use common::{await_logs, capture};
+use common::{await_logs, capture, install_permissive_global_once};
 
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
 const MSG_ID_HEADER: &str = "X-Msg-Id";
@@ -291,6 +291,7 @@ async fn na0347_quota_rate_retention_purge_and_backup_boundaries_are_bounded() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn na0347_secret_env_public_ingress_and_log_redaction_boundaries_hold() {
+    install_permissive_global_once();
     let (logs, writer) = capture();
     let subscriber = tracing_subscriber::fmt()
         .with_writer(move || writer.clone())
