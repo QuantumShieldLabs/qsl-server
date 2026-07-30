@@ -1,30 +1,14 @@
 use qsl_server::{app, AppState, Limits};
 use reqwest::StatusCode as ReqStatus;
 use serde::Deserialize;
-use std::{
-    io::Write,
-    process::Command,
-    sync::{Arc, Mutex},
-};
+use std::process::Command;
 use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
 
+mod common;
+use common::{await_logs, capture, install_permissive_global_once};
+
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
-
-#[derive(Clone)]
-struct SharedWriter(Arc<Mutex<Vec<u8>>>);
-
-impl Write for SharedWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut guard = self.0.lock().unwrap_or_else(|e| panic!("{e}"));
-        guard.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 
 #[derive(Deserialize)]
 struct PullItem {
@@ -390,8 +374,8 @@ async fn legacy_routes_404_without_mutating_or_consuming() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn logs_do_not_leak_route_auth_or_payload_on_success_or_rejects() {
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let writer = SharedWriter(buf.clone());
+    install_permissive_global_once();
+    let (buf, writer) = capture();
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_ansi(false)
@@ -452,11 +436,13 @@ async fn logs_do_not_leak_route_auth_or_payload_on_success_or_rejects() {
     let body: PullResp = delivered.json().await.unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(body.items.len(), 1);
 
-    tokio::task::yield_now().await;
+    // NA-0687: await the relay's own log lines BEFORE aborting the task. abort()
+    // guarantees a not-yet-emitted line is never emitted, so a wait placed after it
+    // could not succeed. The single `yield_now()` this replaces gave the server task
+    // exactly one scheduling opportunity -- a nudge, not a synchronisation.
+    let logs = await_logs(&buf, &["push channel_id=", "event=overloaded"]).await;
     handle.abort();
 
-    let guard = buf.lock().unwrap_or_else(|e| panic!("{e}"));
-    let logs = String::from_utf8_lossy(&guard);
     assert!(logs.contains("push channel_id="));
     assert!(logs.contains("event=overloaded"));
 

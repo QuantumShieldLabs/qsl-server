@@ -1277,19 +1277,219 @@ mod tests {
     use tokio::net::TcpListener;
     use tracing::subscriber::set_default;
 
-    #[derive(Clone)]
-    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    // ================================ NA-0687 / D621 F2 FALLBACK ===============
+    // ⚠ SOURCE OF TRUTH: `tests/common/mod.rs`. THIS IS A SECOND COPY, and it exists
+    // because BOTH single-definition mechanisms fail from inside an inline `mod tests`
+    // (both errors measured 2026-07-29, recorded in the lane evidence):
+    //
+    //   1. `#[path = "../tests/common/mod.rs"] mod common;`
+    //      -> error: couldn't read `src/tests/../tests/common/mod.rs`
+    //      A `#[path]` on a module declared inside an INLINE module resolves relative
+    //      to `<dir of this file>/<inline module name>/` -- here the PHANTOM directory
+    //      `src/tests/`. Because that directory does not exist, the kernel cannot
+    //      resolve `..` through it, so NO relative path escapes it (`../../` fails the
+    //      same way).
+    //   2. `mod common { include!("../tests/common/mod.rs"); }`
+    //      -> error: an inner attribute is not permitted in this context
+    //      -> error[E0753]: expected outer doc comment (x6)
+    //      The helper file's `#![allow(dead_code)]` and `//!` module docs are exactly
+    //      what make it a proper module file, and `include!` cannot accept them.
+    //
+    // The integration tests DO share one definition via `mod common;`. Only this
+    // module needs the copy. ⚠ IF YOU CHANGE THE SYNCHRONISATION RULE, CHANGE IT IN
+    // BOTH PLACES -- and note that `log_sync_timeout_is_named_and_reports_what_it_read`
+    // below is this copy's own control, so a drift into vacuity here fails a test
+    // rather than passing quietly.
+    mod log_sync {
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
 
-    impl std::io::Write for SharedWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            let mut g = self.0.lock().unwrap_or_else(|e| panic!("{e}"));
-            g.extend_from_slice(buf);
-            Ok(buf.len())
+        pub const LOG_WAIT_DEADLINE: Duration = Duration::from_secs(5);
+        pub const LOG_WAIT_POLL: Duration = Duration::from_millis(50);
+
+        pub type LogBuf = Arc<Mutex<Vec<u8>>>;
+
+        #[derive(Clone)]
+        pub struct CaptureWriter(LogBuf);
+
+        impl std::io::Write for CaptureWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| panic!("{e}"))
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
         }
 
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
+        pub fn capture() -> (LogBuf, CaptureWriter) {
+            let buf: LogBuf = Arc::new(Mutex::new(Vec::new()));
+            (buf.clone(), CaptureWriter(buf))
         }
+
+        pub fn log_text(buf: &LogBuf) -> String {
+            let bytes = buf.lock().unwrap_or_else(|e| panic!("{e}"));
+            String::from_utf8_lossy(&bytes).to_string()
+        }
+
+        /// The buffer SIZE is part of the error on purpose: a timeout over an empty
+        /// buffer and one over a populated buffer are different defects.
+        #[derive(Debug)]
+        pub enum LogWaitError {
+            Timeout {
+                needle: String,
+                waited_ms: u64,
+                bytes: usize,
+                lines: usize,
+                excerpt: String,
+            },
+        }
+
+        /// Bounded so a large buffer cannot flood a CI log. TEST-DATA SURFACE ONLY:
+        /// this quotes captured relay log output inside a test process -- the same text
+        /// the surrounding assertions already read in full.
+        pub const LOG_EXCERPT_BYTES: usize = 240;
+
+        fn excerpt(text: &str) -> String {
+            let flat = text.replace('\n', " | ");
+            if flat.len() <= LOG_EXCERPT_BYTES {
+                flat
+            } else {
+                let mut cut = LOG_EXCERPT_BYTES;
+                while cut > 0 && !flat.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                format!("{}\u{2026}<truncated>", &flat[..cut])
+            }
+        }
+
+        /// NA-0687 Phase 5b arm D4, ruled on measurement (see `tests/common/mod.rs` for
+        /// the full matrix): a permissive process-global default that DISCARDS everything,
+        /// installed once per binary, purely to keep process-global filter state
+        /// permissive. It is NOT the capture -- `set_default` below still does that.
+        pub fn install_permissive_global_once() {
+            static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            ONCE.get_or_init(|| {
+                let sub = tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .with_max_level(tracing::Level::TRACE)
+                    .with_writer(std::io::sink)
+                    .finish();
+                let _ = tracing::subscriber::set_global_default(sub);
+            });
+        }
+
+        impl std::fmt::Display for LogWaitError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    LogWaitError::Timeout {
+                        needle,
+                        waited_ms,
+                        bytes,
+                        lines,
+                        excerpt,
+                    } => write!(
+                        f,
+                        "LOG_SYNC_TIMEOUT: needle {needle:?} not observed within \
+                         {waited_ms}ms (buffer {bytes} bytes, {lines} lines) \
+                         buffer_excerpt={excerpt:?}"
+                    ),
+                }
+            }
+        }
+
+        pub async fn try_await_log(buf: &LogBuf, needle: &str) -> Result<String, LogWaitError> {
+            let start = Instant::now();
+            loop {
+                let text = log_text(buf);
+                if text.contains(needle) {
+                    return Ok(text);
+                }
+                if start.elapsed() >= LOG_WAIT_DEADLINE {
+                    return Err(LogWaitError::Timeout {
+                        needle: needle.to_string(),
+                        waited_ms: start.elapsed().as_millis() as u64,
+                        bytes: text.len(),
+                        lines: text.lines().count(),
+                        excerpt: excerpt(&text),
+                    });
+                }
+                tokio::time::sleep(LOG_WAIT_POLL).await;
+            }
+        }
+
+        pub async fn await_log(buf: &LogBuf, needle: &str) -> String {
+            match try_await_log(buf, needle).await {
+                Ok(text) => text,
+                Err(e) => panic!("{e}"),
+            }
+        }
+
+        /// Awaiting only the first needle is not enough: a site asserting on two log
+        /// lines has two emits to lose. The buffer only grows, so the final snapshot
+        /// contains every needle awaited before it.
+        pub async fn await_logs(buf: &LogBuf, needles: &[&str]) -> String {
+            assert!(
+                !needles.is_empty(),
+                "await_logs with no needles would synchronise on nothing"
+            );
+            let mut text = String::new();
+            for needle in needles {
+                text = await_log(buf, needle).await;
+            }
+            text
+        }
+    }
+    use self::log_sync::{await_log, await_logs, capture, install_permissive_global_once};
+
+    /// THIS COPY'S OWN CONTROL (NA-0687 §8, the C-equivalent for the duplicated
+    /// helper). The wait must be BOUNDED, must fail with a NAMED error, and must report
+    /// the size of the buffer it examined. Without this test the second copy above is
+    /// unguarded, and a drift into vacuity would pass quietly -- which is the exact
+    /// defect class this lane exists to close.
+    #[tokio::test]
+    async fn log_sync_timeout_is_named_and_reports_what_it_read() {
+        install_permissive_global_once();
+        let (buf, writer) = capture();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = set_default(subscriber);
+
+        // Something WAS logged -- just not the needle being awaited.
+        tracing::info!("event=something_else");
+
+        let err = match log_sync::try_await_log(&buf, "channel_id=").await {
+            Ok(text) => panic!("the needle was never emitted; got {text:?}"),
+            Err(e) => e,
+        };
+        let log_sync::LogWaitError::Timeout { bytes, lines, .. } = &err;
+        assert!(
+            *bytes > 0,
+            "the buffer was written to; the error must say so"
+        );
+        assert!(*lines >= 1);
+        assert!(
+            err.to_string().contains("LOG_SYNC_TIMEOUT"),
+            "the failure must be NAMED, not anonymous: {err}"
+        );
+
+        // NA-0687 Phase 5b (D4): this copy's guard for the FIX's own failure mode. If the
+        // permissive process-global default is ever absent or restrictive, capture is not
+        // wired at all and these three sites silently revert to the shape that flaked.
+        assert!(
+            tracing::dispatcher::has_been_set(),
+            "no process-global default subscriber: capture is NOT wired"
+        );
+        assert!(
+            tracing::level_filters::LevelFilter::current() >= tracing::Level::INFO,
+            "the process-global max level would drop the relay's INFO lines"
+        );
     }
 
     async fn spawn_server_with_token(
@@ -1466,8 +1666,8 @@ mod tests {
 
     #[tokio::test]
     async fn payload_not_logged() {
-        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let writer = SharedWriter(buf.clone());
+        install_permissive_global_once();
+        let (buf, writer) = capture();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
             .with_writer(move || writer.clone())
@@ -1483,10 +1683,17 @@ mod tests {
         let payload = b"SECRET_PAYLOAD_ABC".to_vec();
         let _ = canonical_push(&client, &base, "nolog", payload).await;
 
+        // NA-0687 / D621 F6+R4, operator-ruled: this test's ONLY assertion is a
+        // negative one, so before this change an empty buffer satisfied it and it
+        // could not fail. Awaiting the relay's own push line first is a
+        // SYNCHRONISATION PRECONDITION, not a new content claim -- 7 of the 12 swept
+        // sites already assert this needle positively. ⚠ The test therefore acquires
+        // its first failure mode here, BY THAT RULING: if the relay ever stops logging
+        // the push line, this goes red. That is the point -- a test that cannot fail is
+        // not a weaker instrument, it is not an instrument.
+        let logged = await_log(&buf, "push channel_id=").await;
         handle.abort();
 
-        let binding = buf.lock().unwrap_or_else(|e| panic!("{e}"));
-        let logged = String::from_utf8_lossy(&binding);
         assert!(!logged.contains("SECRET_PAYLOAD_ABC"));
     }
 
@@ -1502,8 +1709,8 @@ mod tests {
 
     #[tokio::test]
     async fn logs_do_not_contain_raw_channel() {
-        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let writer = SharedWriter(buf.clone());
+        install_permissive_global_once();
+        let (buf, writer) = capture();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
             .with_writer(move || writer.clone())
@@ -1523,18 +1730,19 @@ mod tests {
         let pull = canonical_pull(&client, &base, channel, 1).await;
         assert_eq!(pull.status(), ReqStatus::OK);
 
+        // NA-0687: ENG-0065's original instance -- `abort()` then an immediate read,
+        // the exact shape that entry named. Await first, then abort.
+        let logged = await_log(&buf, "channel_id=").await;
         handle.abort();
 
-        let binding = buf.lock().unwrap_or_else(|e| panic!("{e}"));
-        let logged = String::from_utf8_lossy(&binding);
         assert!(!logged.contains(channel));
         assert!(logged.contains("channel_id="));
     }
 
     #[tokio::test]
     async fn overload_logs_are_safe_and_structured() {
-        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let writer = SharedWriter(buf.clone());
+        install_permissive_global_once();
+        let (buf, writer) = capture();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
             .with_writer(move || writer.clone())
@@ -1557,10 +1765,11 @@ mod tests {
         let body = second.text().await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body, "ERR_OVERLOADED");
 
+        // NA-0687: await all three positive needles, then abort. The derived
+        // long-hex check further down is then measured against a populated buffer too.
+        let logged = await_logs(&buf, &["event=overloaded", "queue_depth=", "max="]).await;
         handle.abort();
 
-        let binding = buf.lock().unwrap_or_else(|e| panic!("{e}"));
-        let logged = String::from_utf8_lossy(&binding);
         assert!(logged.contains("event=overloaded"));
         assert!(logged.contains("queue_depth="));
         assert!(logged.contains("max="));

@@ -4,36 +4,20 @@
 
 use qsl_server::{app, AppState, Limits, ResourceControls, StoreConfig};
 use reqwest::StatusCode as ReqStatus;
-use std::{
-    io::Write,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::subscriber::set_default;
+
+mod common;
+use common::{await_logs, capture, install_permissive_global_once};
 
 const ROUTE_TOKEN_HEADER: &str = "X-QSL-Route-Token";
 const MSG_ID_HEADER: &str = "X-Msg-Id";
 
-#[derive(Clone)]
-struct SharedWriter(Arc<Mutex<Vec<u8>>>);
-
-impl Write for SharedWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut guard = self.0.lock().unwrap_or_else(|e| panic!("{e}"));
-        guard.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn retention_cleanup_logs_redact_route_auth_payload() {
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let writer = SharedWriter(buf.clone());
+    install_permissive_global_once();
+    let (buf, writer) = capture();
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_ansi(false)
@@ -90,11 +74,22 @@ async fn retention_cleanup_logs_redact_route_auth_payload() {
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(expired.status(), ReqStatus::NO_CONTENT);
 
-    tokio::task::yield_now().await;
+    // NA-0687: await the relay's own log lines BEFORE aborting the task. abort()
+    // guarantees a not-yet-emitted line is never emitted, so a wait placed after it
+    // could not succeed. The single `yield_now()` this replaces gave the server task
+    // exactly one scheduling opportunity -- a nudge, not a synchronisation.
+    let logs = await_logs(
+        &buf,
+        &[
+            "event=retention_expired",
+            "channel_id=",
+            "expired_messages=1",
+            "ttl_secs=1",
+        ],
+    )
+    .await;
     handle.abort();
 
-    let guard = buf.lock().unwrap_or_else(|e| panic!("{e}"));
-    let logs = String::from_utf8_lossy(&guard);
     assert!(logs.contains("event=retention_expired"));
     assert!(logs.contains("channel_id="));
     assert!(logs.contains("expired_messages=1"));
