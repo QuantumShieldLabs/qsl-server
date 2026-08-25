@@ -6,7 +6,7 @@ This repository is a satellite of the QSL protocol project. Governance, planning
 ## Workflow
 1) Open an issue describing the change before any PR.
 2) Keep changes minimal and scoped; avoid unrelated refactors.
-3) Every PR must pass the single required `rust` CI check.
+3) Every PR must pass the three required CI checks: `rust`, `advisories`, and `infra-literal-scan`.
 4) Merge commits only (no squash or rebase merges).
 
 ## Local checks
