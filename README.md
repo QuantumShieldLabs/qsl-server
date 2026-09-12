@@ -1,112 +1,175 @@
-# qsl-server (transport-only relay)
+[README.md](https://github.com/user-attachments/files/32137390/README_qsl-server.md)
 
-Transport-only relay for QSL demos. It forwards/stores **opaque** payloads and must not interpret protocol messages.
+# QSL Server
 
-## Public posture and licensing
-- Source in this repository is public and licensed under `AGPL-3.0-only`; see `LICENSE`.
-- This repository contains the public relay code and operator documentation for the transport-only relay boundary.
-- Any separate commercial services or support offerings would be distinct from this repository and do not replace the AGPL terms for the source published here.
+**The QSL relay: a mailbox for sealed bytes.**
 
-## Invariants
-- No protocol parsing, no crypto, no wire changes.
-- Fail-closed with deterministic errors.
-- No secret/payload logging.
+Clients push encrypted frames to a mailbox and pull them back out. The relay stores and
+forwards. It holds no session keys, performs no ratchet operations, and cannot read message
+content.
+
+> [!WARNING]
+> **Research-stage. Not independently audited. Not production-ready.**
+> This is demo and interop infrastructure. Rate limiting, route caps, and idle expiry here are
+> minimal **local in-app** hardening primitives, not a substitute for an edge layer.
+
+---
+
+## What the relay does and does not see
+
+This deserves precision, because "the server can't see anything" is a claim people make too
+loosely.
+
+**On the messaging plane, the relay is opaque transport.** It accepts sealed frames, holds
+them in a mailbox addressed by a route token, and hands them back. It never parses a protocol
+message, performs no cryptography on payloads, and cannot decrypt anything.
+
+**The invite plane is deliberately server-mediated.** Establishing a new contact uses relay
+endpoints that create, redeem, and revoke invitation slots. The relay compares a presented
+capability against a stored SHA-256 digest and burns one-shot tickets. That is what makes an
+invitation genuinely single-use and revocable, and it is protocol participation — we name it
+rather than describe the relay as semantics-free and let a reviewer find the invite routes.
+Even there, the invitation `bundle` and `invite_sig` are stored as opaque bytes and are never
+parsed.
+
+**What a relay operator can still observe.** Traffic metadata: which mailboxes are active, how
+much, how large, and when. Message content is end-to-end encrypted and unreadable to the
+relay. **Metadata resistance is open work, not a solved problem**, and running your own relay
+is the current answer.
+
+---
+
+## Design invariants
+
+- No protocol message parsing. No payload cryptography. No wire-format decisions.
+- Fail-closed with deterministic, documented error codes.
+- No secret or payload logging.
+- Route tokens are stored only as digests.
+- Secrets travel in request **bodies**, never in a path or query parameter. Legacy path-token
+  routes were retired for exactly this reason: a URI ends up in logs, proxies, and history.
+
+---
 
 ## API
-- Canonical push: `POST /v1/push` with `X-QSL-Route-Token: <token>` -> `{ "id": "<msg_id>" }`
-- Canonical pull: `GET /v1/pull?max=N` with `X-QSL-Route-Token: <token>` -> JSON `{ "items": [ { "id": "<msg_id>", "data": [<byte>, ...] }, ... ] }` (200) or 204 if empty
-- Optional `X-Msg-Id` supplies an opaque message identifier. It is not an idempotency key: duplicate values are accepted as separate queued messages. Accepted message IDs are logged as non-secret operational metadata, so clients must not put secrets in this header.
-- Legacy path-token routes are retired. `POST /v1/push/{channel}` and `GET /v1/pull/{channel}?max=N` are no longer supported because they carry the route token in the request URI.
-- Invite slots (NA-0678): `POST /v1/invite/create`, `POST /v1/invite/redeem`, `POST /v1/invite/revoke`. All three are POSTs carrying `invite_id` and any secret in the JSON **body** — never in a path or query parameter, for the same reason the legacy route-token paths above were retired.
-  - `create` accepts `{invite_id, cap_hash, expiry, bundle_b64, invite_sig_b64}` and returns `{revoke_token}`. The **client** mints the capability and uploads only its SHA-256; the relay never holds a capability in plaintext before a redeemer presents one, and **there is no mint endpoint**.
-  - `redeem` accepts `{invite_id, cap}` and returns `{bundle_b64, invite_sig_b64, ticket}`. Consumption is an atomic compare-and-set: exactly one redemption of a slot can win, and every other gets `ERR_INVITE_ALREADY_USED`.
-  - `revoke` accepts `{invite_id, revoke_token}` and is idempotent.
-  - The `ticket` is a **one-shot** credential for the handshake push: `POST /v1/push` to an invite slot requires `X-QSL-Invite-Ticket`. Pushes to routes that are not invite slots are unaffected.
-  - The relay stores `bundle` and `invite_sig` as **opaque bytes** and never parses them. Consumed and revoked slots are **tombstoned until expiry** (blobs cleared) so that "already used" stays distinguishable from "never existed".
 
-## Behavior and limits
-- `MAX_BODY_BYTES` (default 1 MiB) → 413 + `ERR_TOO_LARGE`
-- `MAX_QUEUE_DEPTH` (default 257) → 429 + `ERR_OVERLOADED`
-- `MAX_ROUTE_COUNT` (default 256) caps live route slots. Accepted pushes to new routes create slots only when the cap allows; new-route pushes beyond the cap return 429 + `ERR_ROUTE_CAP`.
-- `PUSH_RATE_BURST` (default 257) and `PUSH_RATE_REFILL_PER_SEC` (default 257, `0` allowed to disable refill) provide a local in-app per-route push token bucket. Pushes beyond available tokens return 429 + `ERR_RATE_LIMITED`.
-- `ROUTE_IDLE_TTL_MS` (default 300000, capped at 86400000) applies a Time-based idle TTL to route slots. Cleanup runs deterministically on canonical push/pull after auth, route-token, body-size, and pull-`max` validation. Expired routes are removed with queued messages discarded, releasing route capacity and per-route rate accounting before the current accepted request is evaluated.
-- Empty body → 400 + `ERR_EMPTY_BODY`
-- Missing limit values use defaults. Non-numeric values fail startup with deterministic config errors. Zero values fail startup for `MAX_BODY_BYTES`, `MAX_QUEUE_DEPTH`, `MAX_ROUTE_COUNT`, `PUSH_RATE_BURST`, and `ROUTE_IDLE_TTL_MS`; `PUSH_RATE_REFILL_PER_SEC=0` is allowed for deterministic no-refill operation. Values above the built-in ceilings are capped.
-- `RELAY_TOKEN` is optional. When set, canonical push/pull require `Authorization: Bearer <token>` and reject missing or invalid bearer tokens with 401 `ERR_UNAUTHORIZED` before mutating queues. When unset or empty, relay auth is disabled and route-token header checks still apply.
-- Unknown pulls return 204 without creating route slots. Draining a route to empty removes the live slot, releasing global route capacity and per-route rate accounting.
-- `MAX_INVITE_SLOTS` (default 256, ceiling 4096) caps live invite slots; beyond it, `create` returns 429 + `ERR_INVITE_CAP_FULL` and **never evicts an existing slot** — an eviction path would let an attacker delete other people's invites.
-- `INVITE_CREATE_BURST` (default 32) and `INVITE_CREATE_REFILL_PER_SEC` (default 1, `0` allowed) provide a **global** invite-create token bucket returning 429 + `ERR_RATE_LIMITED`. It is global rather than per-route because an invite has no route token until it exists. The cap and the bucket are both required and are not substitutes: the cap bounds storage, the bucket bounds denial.
-- `MAX_INVITE_BUNDLE_BYTES` (default 16384, ceiling 65536) → 413 + `ERR_INVITE_TOO_LARGE`. `MAX_INVITE_EXPIRY_SECS` (default 259200 = 72 h, ceiling 30 days) clamps a requested expiry to what this relay offers.
-- Rate and global route-cap controls are minimal local in-app hardening primitives. They do not approve production deployment, and reverse proxy / edge rate limiting remains a separate deployment layer.
+### Messaging plane
 
-## Run (local)
+| Route | Notes |
+|---|---|
+| `POST /v1/push` | Header `X-QSL-Route-Token`. Returns `{"id": "<msg_id>"}`. |
+| `GET /v1/pull?max=N&ack=lease` | Header `X-QSL-Route-Token`. Returns `{"items":[{"id","data"}]}` or `204` when empty. |
+| `POST /v1/pull/ack` | Retires leased messages by id. |
+| `GET /v1/server-info` | Reports configuration and auth mode. |
+
+`X-Msg-Id` optionally supplies an opaque message identifier. **It is not an idempotency key** —
+duplicate values are accepted as separate queued messages. Accepted ids are logged as
+non-secret operational metadata, so never put a secret in that header.
+
+### Invite plane
+
+All three are POSTs carrying `invite_id` and any secret in the JSON body.
+
+- **`POST /v1/invite/create`** — `{invite_id, cap_hash, expiry, bundle_b64, invite_sig_b64}`
+  returns `{revoke_token}`. The **client** mints the capability and uploads only its SHA-256.
+  The relay never holds a capability in plaintext before a redeemer presents one, and **there
+  is no mint endpoint**.
+- **`POST /v1/invite/redeem`** — `{invite_id, cap}` returns `{bundle_b64, invite_sig_b64,
+  ticket}`. Consumption is an atomic compare-and-set: exactly one redemption wins and every
+  other gets `ERR_INVITE_ALREADY_USED`.
+- **`POST /v1/invite/revoke`** — `{invite_id, revoke_token}`, idempotent.
+
+The returned `ticket` is a **one-shot** credential for the handshake push: a `POST /v1/push`
+to an invite slot requires `X-QSL-Invite-Ticket`. Pushes to ordinary routes are unaffected.
+
+Consumed and revoked slots are **tombstoned until expiry** with their blobs cleared, so
+"already used" stays distinguishable from "never existed".
+
+---
+
+## Configuration
+
+Every limit has a default, a ceiling, and a deterministic error. Non-numeric values fail
+startup rather than falling back silently. CLI overrides env; env overrides defaults.
+
+| Setting | Default | On breach |
+|---|---|---|
+| `MAX_BODY_BYTES` | 1 MiB | `413 ERR_TOO_LARGE` |
+| `MAX_QUEUE_DEPTH` | 257 | `429 ERR_OVERLOADED` |
+| `MAX_ROUTE_COUNT` | 256 | `429 ERR_ROUTE_CAP` |
+| `PUSH_RATE_BURST` / `PUSH_RATE_REFILL_PER_SEC` | 257 / 257 | `429 ERR_RATE_LIMITED` |
+| `ROUTE_IDLE_TTL_MS` | 300000 | idle routes reclaimed |
+| `PULL_LEASE_SECS` | 60 | unacked messages redelivered |
+| `RETENTION_TTL_SECS` | 604800 (7 days) | expired messages swept |
+| `MAX_INVITE_SLOTS` | 256 | `429 ERR_INVITE_CAP_FULL` |
+| `INVITE_CREATE_BURST` / `INVITE_CREATE_REFILL_PER_SEC` | 32 / 1 | `429 ERR_RATE_LIMITED` |
+| `MAX_INVITE_BUNDLE_BYTES` | 16384 | `413 ERR_INVITE_TOO_LARGE` |
+| `MAX_INVITE_EXPIRY_SECS` | 259200 (72 h) | requested expiry clamped |
+| `BIND_ADDR` | `127.0.0.1` | public bind requires explicit opt-in |
+
+**Two deliberate choices worth explaining:**
+
+The invite slot cap **never evicts an existing slot** when full. An eviction path would let an
+attacker delete other people's invitations by flooding.
+
+The invite-create bucket is **global** rather than per-route, because an invitation has no
+route token until it exists. The cap and the bucket are both required and are not substitutes:
+the cap bounds storage, the bucket bounds denial.
+
+### Authentication
+
+`RELAY_TOKEN` is optional. When set, push and pull require `Authorization: Bearer <token>` and
+reject a missing or invalid token with `401 ERR_UNAUTHORIZED` before any queue mutation. When
+unset, relay bearer auth is disabled and only route-token header checks apply.
+
+> [!IMPORTANT]
+> A relay with no `RELAY_TOKEN` configured is **open to anyone who can reach the port**.
+> `/v1/server-info` reports which mode is in force. Check it after deploying.
+
+---
+
+## Run
+
 ```bash
 cargo run
 # listens on 127.0.0.1:8080 by default
 ```
 
-CLI overrides env, env overrides defaults:
-
 ```bash
-qsl-server --bind 0.0.0.0 --port 8080 --max-body-bytes 1048576 --max-queue-depth 257 --max-route-count 256 --push-rate-burst 257 --push-rate-refill-per-sec 257 --route-idle-ttl-ms 300000
+qsl-server --bind 0.0.0.0 --port 8080 \
+  --max-body-bytes 1048576 --max-queue-depth 257 --max-route-count 256 \
+  --push-rate-burst 257 --push-rate-refill-per-sec 257 --route-idle-ttl-ms 300000
 ```
 
-Environment defaults:
-- `BIND_ADDR=127.0.0.1` (safe default, explicit opt-in needed for public bind)
-- `PORT=8080`
-- `MAX_BODY_BYTES=1048576`
-- `MAX_QUEUE_DEPTH=257`
-- `MAX_ROUTE_COUNT=256`
-- `PUSH_RATE_BURST=257`
-- `PUSH_RATE_REFILL_PER_SEC=257`
-- `ROUTE_IDLE_TTL_MS=300000`
+---
 
-## Remote deployment (Ubuntu 24.04 + systemd)
+## Status and honest limits
 
-The repo includes reproducible install/update scripts and packaging templates.
+- **Not independently audited.** No third party has reviewed this relay.
+- **Not production-ready.** The local in-app hardening primitives here bound local abuse; they do not
+  approve a production deployment. Reverse-proxy and edge rate limiting remain a separate
+  layer you must supply.
+- **Metadata is visible to the operator.** See above. Run your own.
+- Open defects exist and are tracked in the open.
 
-```bash
-# copy scripts to the host, then run as root:
-sudo bash scripts/install_ubuntu.sh /path/to/qsl-server
-# later updates:
-sudo bash scripts/update_ubuntu.sh /path/to/qsl-server
-```
+---
 
-Artifacts:
-- systemd unit: `packaging/systemd/qsl-server.service`
-- env template: `packaging/systemd/relay.env.example`
-- caddy example: `packaging/caddy/Caddyfile.example`
-- production runbook: `packaging/runbook_ubuntu.md`
-- install script: `scripts/install_ubuntu.sh`
-- update script: `scripts/update_ubuntu.sh`
-- checksum-verified release update: `scripts/update_from_release.sh --release vX.Y.Z`
-- audit script: `scripts/qsl_relay_audit.sh`
-- verify script: `scripts/verify_remote.sh`
+## Security reporting
 
-### Firewall notes (example)
-```bash
-# allow 8080/tcp
-sudo ufw allow 8080/tcp
-```
+Please do **not** file security-sensitive reports in public issues. Use GitHub private
+vulnerability reporting on this repository, or follow [`SECURITY.md`](SECURITY.md). If private
+reporting is unavailable, open a minimal public issue with **no exploit details**, stating
+that you can share specifics privately.
 
-## Verify deployment (on the host)
-```bash
-sudo bash scripts/verify_remote.sh
-```
+## Related repositories
 
-The verify script checks:
-- systemd active status
-- listener on port 8080
-- deployed binary metadata from `/opt/qsl-server/DEPLOYMENT_INFO`
-- installed binary checksum
-- canonical relay compatibility on loopback and, when derivable, the public TLS host
-- push/pull sanity
-- deployed git HEAD
+- [**qsl-protocol**](https://github.com/QuantumShieldLabs/qsl-protocol) — specifications,
+  conformance vectors, and the reference implementation
+- [**qsl-desktop**](https://github.com/QuantumShieldLabs/qsl-desktop) — the desktop client
+- [**qsl-attachments**](https://github.com/QuantumShieldLabs/qsl-attachments) — encrypted
+  attachment plane, a separate service surface
 
-Fail-fast rule:
-- Run `scripts/verify_remote.sh` before any real-world validation or qsc relay test.
-- A deployment that still answers the legacy path-token pull shape is deployment drift, not a weak-host saturation result and not a qsl-attachments defect.
+## License
 
-## Scope boundary
-- Payloads are opaque bytes; the relay does not parse or interpret protocol messages.
-- Transport-only relay; no protocol or cryptographic behavior is implemented here.
+`AGPL-3.0-only` — see [`LICENSE`](LICENSE). Any future commercial services or support
+offerings are separate from this repository and do not replace the AGPL terms on the source
+published here.
