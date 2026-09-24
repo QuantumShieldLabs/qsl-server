@@ -1,4 +1,5 @@
 # DOC-SRV-007 Invite Slot Contract v1.0.0 (DRAFT)
+v1 only; v2 in DOC-SRV-008 (`docs/server/DOC-SRV-008_Relay_V2_Contract_v1.0.0_DRAFT.md`, DRAFT).
 
 ## Purpose
 
