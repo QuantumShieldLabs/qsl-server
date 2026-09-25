@@ -17,6 +17,15 @@ pub const MAX_PULL_LEASE_SECS_CEILING: usize = 3_600;
 // table, and left `meta.schema_version = '1'`.
 const SCHEMA_VERSION: i64 = 2;
 
+// REVIEW C4: the two retention predicates, named so a test can pin their query plan. The
+// predicate must stay SARGABLE (the bare column on one side) or SQLite cannot use
+// idx_messages_enqueued and every request's lazy sweep scans the whole messages table.
+const SWEEP_COUNT_EXPIRED_SQL: &str = "SELECT r.log_id, COUNT(m.seq) FROM messages m
+     JOIN routes r ON r.route_key = m.route_key
+     WHERE m.enqueued_at <= ?2 - ?1
+     GROUP BY m.route_key";
+const SWEEP_DELETE_EXPIRED_SQL: &str = "DELETE FROM messages WHERE enqueued_at <= ?2 - ?1";
+
 // Bounds a single ack request's IN-list; well under SQLite's variable limit.
 pub const MAX_ACK_IDS: usize = 4_096;
 
@@ -293,12 +302,7 @@ impl Store {
         let mut stats = SweepStats::default();
         {
             let mut stmt = conn
-                .prepare_cached(
-                    "SELECT r.log_id, COUNT(m.seq) FROM messages m
-                     JOIN routes r ON r.route_key = m.route_key
-                     WHERE m.enqueued_at + ?1 <= ?2
-                     GROUP BY m.route_key",
-                )
+                .prepare_cached(SWEEP_COUNT_EXPIRED_SQL)
                 .map_err(map_err)?;
             let rows = stmt
                 .query_map(params![ttl, now], |row| {
@@ -311,10 +315,7 @@ impl Store {
             }
         }
         stats.expired_messages = conn
-            .execute(
-                "DELETE FROM messages WHERE enqueued_at + ?1 <= ?2",
-                params![ttl, now],
-            )
+            .execute(SWEEP_DELETE_EXPIRED_SQL, params![ttl, now])
             .map_err(map_err)?;
         if stats.expired_messages > 0 {
             let mut stmt = conn
@@ -704,6 +705,7 @@ impl Store {
         &self,
         route_key: &str,
         max: usize,
+        max_bytes: usize,
         now: i64,
         mode: PullMode,
     ) -> Result<PullOutcome, String> {
@@ -732,8 +734,16 @@ impl Store {
                     ))
                 })
                 .map_err(map_err)?;
+            // REVIEW C1: a per-pull BYTE budget. Rows are read lazily, so stopping here also stops
+            // materialising bodies. At least one item is always returned, so a single message of
+            // max_body_bytes still moves; the rows not taken are neither leased nor deleted.
+            let mut total_bytes: usize = 0;
             for row in rows {
                 let (seq, msg_id, body) = row.map_err(map_err)?;
+                if !items.is_empty() && total_bytes.saturating_add(body.len()) > max_bytes {
+                    break;
+                }
+                total_bytes = total_bytes.saturating_add(body.len());
                 seqs.push(seq);
                 items.push(StoredMsg { msg_id, body });
             }
@@ -846,5 +856,31 @@ impl Store {
             route_drained,
             sweep,
         })
+    }
+}
+
+#[cfg(test)]
+mod review_c4_tests {
+    use super::*;
+
+    // REVIEW-relay-server C4 (SR-19 delta symbol SX: store::Store::sweep_expired; base 0c04fa47 plus the
+    // behavior-neutral extraction of the two SQL strings into the constants above).
+    #[test]
+    fn review_c4_retention_delete_uses_the_enqueued_index() {
+        let store = Store::open(&StoreConfig::default()).unwrap_or_else(|e| panic!("{e}"));
+        let guard = store.conn.lock().unwrap_or_else(|e| panic!("{e}"));
+        let mut st = guard
+            .prepare(&format!("EXPLAIN QUERY PLAN {SWEEP_DELETE_EXPIRED_SQL}"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let plan: Vec<String> = st
+            .query_map(params![60i64, 1_000i64], |r| r.get::<_, String>(3))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .map(|r| r.unwrap_or_else(|e| panic!("{e}")))
+            .collect();
+        println!("REVIEW_C4 plan={plan:?}");
+        assert!(
+            plan.iter().any(|p| p.contains("idx_messages_enqueued")),
+            "the retention DELETE scans instead of using idx_messages_enqueued: {plan:?}"
+        );
     }
 }

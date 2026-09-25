@@ -111,6 +111,20 @@ pub const INVITE_CREATE_REFILL_PER_SEC_DEFAULT: usize = 1;
 // repurposed. That matches the `x-qsl-route-token` precedent exactly.
 const INVITE_TICKET_HEADER: &str = "x-qsl-invite-ticket";
 
+// REVIEW C2: route-appropriate body caps, checked BEFORE any JSON parse, base64 decode or hash.
+// MAX_BODY_BYTES governs /v1/push only; without these the JSON routes were bounded solely by axum's
+// 2 MiB DefaultBodyLimit, whatever the operator configured.
+const INVITE_REDEEM_BODY_CAP: usize = 4 * 1024;
+const INVITE_REVOKE_BODY_CAP: usize = 4 * 1024;
+// ack ids are client-chosen x-msg-id strings with no length rule of their own (ENG-0307/0308), so the cap
+// stays generous; it tightens once ids are shape-bounded.
+const ACK_BODY_CAP: usize = 1024 * 1024;
+
+/// The largest legitimate create body: two base64url blobs of max_bundle_bytes plus the JSON frame.
+fn invite_create_body_cap(max_bundle_bytes: usize) -> usize {
+    2 * (4 * max_bundle_bytes).div_ceil(3) + 4 * 1024
+}
+
 pub const MAX_BODY_BYTES_CEILING: usize = 1024 * 1024;
 pub const MAX_QUEUE_DEPTH_CEILING: usize = 257;
 pub const MAX_ROUTE_COUNT_CEILING: usize = 256;
@@ -542,6 +556,23 @@ struct AckResp {
 
 const ROUTE_TOKEN_HEADER: &str = "x-qsl-route-token";
 
+// REVIEW C1: one pull returns at most max(PULL_BUDGET_BYTES, max_body_bytes) RAW bytes, and always at least
+// one item. The v1 wire encodes each body as a JSON array of decimal integers (~3.6x for ciphertext), so
+// without a budget one pull of a full queue held max_queue_depth * max_body_bytes raw (257 MiB at the source
+// default) plus ~3.6x that encoded, per request; at this budget the peak is 16 MiB raw plus ~57 MiB encoded.
+//
+// The budget is FINISH_SCAN_BATCH x MAX_BODY_BYTES_CEILING (16 MiB), not a round number, because of a CLIENT
+// COUPLING: qsc's invite-finish scan (qsl-protocol qsc src/invite/mod.rs, FINISH_SCAN_BATCH = 16) pulls
+// batches of 16 and reads a batch SHORTER than it asked for as an exhausted mailbox. Limits::new caps
+// max_body_bytes at the ceiling, so at this budget no 16-frame batch can be cut at any legal configuration
+// and every shipped qsc stays safe. The client-side fix (only an EMPTY batch means exhausted) is an ENG entry
+// to follow, carried to F08 (the v2 pull with a byte budget); until it lands, do not lower this budget below
+// FINISH_SCAN_BATCH x MAX_BODY_BYTES_CEILING, and keep FINISH_SCAN_BATCH in step with qsc.
+// It also keeps the NA-0598 pin: 256 x 16 KiB chunks plus the manifest arrive in ONE pull
+// (tests/na0598_exact_4mib_relay_boundary.rs).
+const FINISH_SCAN_BATCH: usize = 16;
+const PULL_BUDGET_BYTES: usize = FINISH_SCAN_BATCH * MAX_BODY_BYTES_CEILING;
+
 // NA-0678: exactly THREE invite routes. There is deliberately no
 // `/v1/invite/mint` -- the client mints the capability and uploads only its
 // hash, so no relay-side path ever holds a capability in plaintext before a
@@ -676,6 +707,9 @@ async fn invite_create(
     if !auth_ok(&headers, st.relay_token.as_deref()) {
         return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
     }
+    if body.len() > invite_create_body_cap(st.invite_limits.max_bundle_bytes) {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "ERR_INVITE_TOO_LARGE").into_response();
+    }
     // The global create-rate gate runs BEFORE any parsing or storage work, so a
     // flood costs the relay a lock and nothing else.
     {
@@ -782,6 +816,9 @@ async fn invite_redeem(
     if !auth_ok(&headers, st.relay_token.as_deref()) {
         return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
     }
+    if body.len() > INVITE_REDEEM_BODY_CAP {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "ERR_TOO_LARGE").into_response();
+    }
     let Ok(req) = serde_json::from_slice::<InviteRedeemReq>(&body) else {
         return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
     };
@@ -847,6 +884,9 @@ async fn invite_revoke(
 ) -> impl IntoResponse {
     if !auth_ok(&headers, st.relay_token.as_deref()) {
         return (StatusCode::UNAUTHORIZED, "ERR_UNAUTHORIZED").into_response();
+    }
+    if body.len() > INVITE_REVOKE_BODY_CAP {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "ERR_TOO_LARGE").into_response();
     }
     let Ok(req) = serde_json::from_slice::<InviteRevokeReq>(&body) else {
         return (StatusCode::BAD_REQUEST, "ERR_INVITE_BAD_BODY").into_response();
@@ -1197,7 +1237,8 @@ async fn pull_message(
     let outcome: PullOutcome = {
         let store = st.store.clone();
         let key = route_key.clone();
-        match run_store(move || store.pull(&key, max, now, mode)).await {
+        let max_bytes = PULL_BUDGET_BYTES.max(st.limits.max_body_bytes);
+        match run_store(move || store.pull(&key, max, max_bytes, now, mode)).await {
             Ok(v) => v,
             Err(code) => return (StatusCode::INTERNAL_SERVER_ERROR, code).into_response(),
         }
@@ -1237,6 +1278,9 @@ async fn ack_messages(
         Ok(v) => v,
         Err(code) => return (StatusCode::BAD_REQUEST, code).into_response(),
     };
+    if body.len() > ACK_BODY_CAP {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "ERR_TOO_LARGE").into_response();
+    }
     let Ok(req) = serde_json::from_slice::<AckReq>(&body) else {
         return (StatusCode::BAD_REQUEST, "ERR_BAD_ACK_BODY").into_response();
     };
