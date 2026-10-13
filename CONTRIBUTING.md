@@ -1,13 +1,10 @@
 # Contributing
 
-## Scope
-This repository is a satellite of the QSL protocol project. Governance, planning, and decisions originate in the qsl-protocol repository; changes here land through lanes governed by that spine. Protocol-level work (specifications, cryptography, the qsc client) belongs in qsl-protocol.
+Goals: G1, G2, G3, G4, G5
 
-## Workflow
-1) Open an issue describing the change before any PR.
-2) Keep changes minimal and scoped; avoid unrelated refactors.
-3) Every PR must pass the three required CI checks: `rust`, `advisories`, and `infra-literal-scan`.
-4) Merge commits only (no squash or rebase merges).
+Revision: 2026-10-13. Read [the project workflow](PROJECT_WORKFLOW.md).
+
+Implement one connected scoped change; run relevant targeted local checks and preserve all required CI before human merge. Log every actual shortcut in the one HARDENING.md ledger with cut/risk/mandatory trigger. Sensitive interfaces are independently reviewed before dependent use. An already scoped task does not need a duplicate issue or new routine approval. Report exact source, tests and limitations; never publish credentials/private raw evidence.
 
 ## Local checks
 The required `rust` check runs, in order: `bash scripts/ci/test_aws_update_and_verify.sh`, `bash scripts/ci/test_update_checksum.sh`, `cargo fmt --all -- --check`, `cargo test -q`, and `cargo clippy -q -- -D warnings`. Run the same commands locally before opening a PR.

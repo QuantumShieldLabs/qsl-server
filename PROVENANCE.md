@@ -6,7 +6,7 @@ This document defines how to verify official qsl-server source and deployment ar
 
 - Source of truth is `main` in:
   - https://github.com/QuantumShieldLabs/qsl-server
-- Governance and evidence are maintained in:
+- Current process is PROJECT_WORKFLOW.md; the managed TASK owns live work. Historical decisions and evidence are maintained in:
   - `NEXT_ACTIONS.md`
   - `TRACEABILITY.md`
   - `DECISIONS.md`
@@ -48,3 +48,5 @@ Compare the service unit content and binary checksum to your recorded release no
 
 - Trust source commit + release checksum + CI evidence together.
 - Treat detached binaries without source/commit/run linkage as untrusted.
+
+Current development branches may contain reviewed work awaiting human merge; distinguish their exact source/evidence from merged main and deployment provenance.
