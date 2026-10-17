@@ -173,3 +173,7 @@ that you can share specifics privately.
 `AGPL-3.0-only` — see [`LICENSE`](LICENSE). Any future commercial services or support
 offerings are separate from this repository and do not replace the AGPL terms on the source
 published here.
+
+## Development workflow
+
+Read [PROJECT_WORKFLOW.md](PROJECT_WORKFLOW.md) for the project-wide two-lane build method. The live TASK records the current assignment and authorized operating mode; HARDENING.md records deferred rigor against blocking triggers. A working slice, qualified milestone and release have different acceptance gates. Required CI and honest public claims remain enforced.
