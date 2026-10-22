@@ -1,16 +1,28 @@
 # Contributing
 
-## Scope
-This repository is a satellite of the QSL protocol project. Governance, planning, and decisions originate in the qsl-protocol repository; changes here land through lanes governed by that spine. Protocol-level work (specifications, cryptography, the qsc client) belongs in qsl-protocol.
+Thank you for helping improve QSL. This repository covers relay authentication, mailbox and invitation handling, resource bounds, stored data, expiry and operational behavior.
 
-## Workflow
-1) Open an issue describing the change before any PR.
-2) Keep changes minimal and scoped; avoid unrelated refactors.
-3) Every PR must pass the three required CI checks: `rust`, `advisories`, and `infra-literal-scan`.
-4) Merge commits only (no squash or rebase merges).
+## Choose the right route
 
-## Local checks
-The required `rust` check runs, in order: `bash scripts/ci/test_aws_update_and_verify.sh`, `bash scripts/ci/test_update_checksum.sh`, `cargo fmt --all -- --check`, `cargo test -q`, and `cargo clippy -q -- -D warnings`. Run the same commands locally before opening a PR.
+| Contribution | Start with |
+|---|---|
+| Security-sensitive finding | [SECURITY.md](SECURITY.md); keep details private |
+| Reproducible bug or specification ambiguity | An issue with the revision, expected behavior and minimal synthetic reproduction |
+| Documentation or evidence correction | Identify the statement, source and proposed replacement |
+| Substantive code, protocol or interface change | Discuss the problem and scope with maintainers before implementation |
 
-## Code of conduct
-Behavior expectations are defined in `CODE_OF_CONDUCT.md`.
+External review, negative tests, conformance gaps and independent implementations are valuable. Maintainers coordinate accepted implementation work and required reviews; an issue is not permission to change an unsettled security contract.
+
+## Prepare a focused change
+
+Keep one coherent outcome per PR. Explain the problem, resulting behavior, validation and remaining limits. Preserve accepted technical requirements and historical evidence. Protocol or persisted-format changes need their affected vectors, traceability and independent review.
+
+Use synthetic data. Remove credentials, private endpoints and sensitive material from logs, fixtures and screenshots. Do not reduce tests, bypass a scanner or change a baseline to make a check pass.
+
+## Validate against the repository
+
+Use the [CI workflow](.github/workflows/ci.yml) for exact validation recipes. The reviewed workflow runs the AWS-update and checksum-wrapper checks, formatting, tests and Clippy across all targets. Advisory and privacy checks are separate jobs. A local server run does not establish safe public deployment.
+
+All required repository checks remain binding. State exactly what you ran and what remains unverified; a skipped check is not a pass. Maintainers verify the current protection rules and review requirements at publication. Reviewed changes use merge commits; no merge or release is implied by opening a PR.
+
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. Security review and support availability remain subject to the project's research-stage status.
