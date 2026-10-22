@@ -41,6 +41,10 @@ The default bind is loopback, `127.0.0.1:8080`. Keep development experiments loc
 
 See the [configuration guide](docs/CONFIGURATION.md) for the published defaults and interface details. Public exposure needs operational and security validation beyond the local checks; a successful local run is not deployment approval.
 
+## Resource controls
+
+Rate limiting and route capacity are local in-app controls. Exhausted rate budgets return `ERR_RATE_LIMITED`; exhausted route capacity returns `ERR_ROUTE_CAP`; a full queue returns `ERR_OVERLOADED`. These bounds apply to this relay process and do not establish distributed quotas or safe hostile public exposure.
+
 ## Review and contribute
 
 Begin with [START_HERE.md](START_HERE.md) and [CONTRIBUTING.md](CONTRIBUTING.md). Review admission, queue bounds, authentication, leases, expiry, restart and error paths together. Avoid capability-bearing URLs and sensitive logs.
