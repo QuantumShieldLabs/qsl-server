@@ -7,6 +7,12 @@ The relay stores and forwards client-protected frames. It does not hold the clie
 > [!WARNING]
 > Research stage. Not independently audited or production-ready. Local resource controls do not establish safe public deployment.
 
+## How this fits the next transport direction
+
+The project intends to explore QSL end-to-end encrypted exchange over **Katzenpost (KP)** after the vault and necessary application prerequisites are ready. This repository documents the existing mailbox/invitation relay; it is not a KP implementation. The planned direction does not establish that existing relay responsibilities have been replaced or that migration is complete.
+
+Read the [November 2026 project update](https://github.com/QuantumShieldLabs/qsl-protocol/blob/main/docs/public/PROJECT_STATUS_2026-11.md) for current progress and the boundary between development candidates, public source and plans.
+
 ## Trust and visibility
 
 | The relay handles | The operator can observe |
