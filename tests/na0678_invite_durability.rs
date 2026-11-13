@@ -72,6 +72,8 @@ fn measure(n: usize, tag: &str) -> (usize, bool) {
     let mut child = Command::new("strace")
         .args([
             "-f",
+            // Killing the tracer must also terminate its owned relay process.
+            "--kill-on-exit",
             "-tt",
             "-e",
             "trace=fsync,fdatasync,write,writev,sendto",
